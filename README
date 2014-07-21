@@ -1,0 +1,27 @@
+# unit test page code
+g++ -O3 -o page page.cpp page_test.cpp
+./page FNAME PAGE_BIT_SIZE
+
+# unit test thread-safe logging
+g++ -O3 -o logger logger.cpp logger_test.cpp
+./logger
+
+# unit test latch manager
+g++ -O3 -o latch logger.cpp page.cpp latchmgr.cpp latchmgr_test.cpp
+./latchmgr
+
+# unit test buffer pool manager
+g++ -O3 -o bufmgr logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp buffer_mgr_test.cpp
+./bufmgr FNAME PAGE_BIT_SIZE
+
+# test BLink Tree 
+g++ -O3 -o bltindex logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp bltindex.cpp bltindex_test.cpp -lpthread
+rm -f testdb
+./bltindex
+    -f dbname            - the name of the index file(s)
+    -c cmd,cmd,..        - list of: Audit, Write, Delete, Find, Scan, Count, one per thread
+    -k k_1,k_2,..        - matching list of source key files k_i, one per thread
+    -p PageBits          - page size in bits
+    -n PoolSize          - number of buffer pool mmapped page segments
+    -s SegBits           - segment size in pages in bits
+
