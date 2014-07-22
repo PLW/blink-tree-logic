@@ -597,7 +597,9 @@ namespace mongo {
             // if key already exists, update id and return
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
 
-                __OSS__( "duplicate key: " << *key );
+                char buf[ key->_len+1 ];
+                strncpy ( buf, (const char*)key->_key, key->_len );
+                __OSS__( "duplicate key: " << buf );
                 Logger::logInfo( _thread, __ss__, __LOC__ );
 
                 if (Page::slotptr(set->_page, slot)->_dead) set->_page->_act++;
