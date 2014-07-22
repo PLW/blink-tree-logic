@@ -46,26 +46,25 @@ namespace mongo {
     /**
     *  The page is allocated from low and high ends.  The key offsets and
     *  PageId's are allocated from the bottom, while the text of the key is
-    *  allocated from the top.  When the two areas meet, the page is split into
-    *  two.
+    *  allocated from the top.  When the two areas meet, the page is split.
     *
     *  A key consists of a length byte, two bytes of index number (0 - 65534),
     *  and up to 253 bytes of key value.  Duplicate keys are discarded.
-    *  Associated with each key is a 48 bit row-id, or any other value desired.
+    *  Associated with each key is a 48 bit docid, or any other value desired.
 	*
-    *  The b-tree root is always located at page 1.  The first leaf page of
+    *  The bltindex root is always located at page 1.  The first leaf page of
     *  level zero is always located on page 2.
 	*
-    *  The b-tree pages are linked with next pointers to facilitate
+    *  The bltindex pages are linked with next pointers to facilitate
     *  enumerators, and provide for concurrency.
 	*
     *  When the root page fills, it is split in two and the tree height is
     *  raised by a new root at page one with two keys.
 	*
-    *  Deleted keys are marked with a dead bit until page cleanup. The fence
+    *  Deleted keys are marked with a 'dead' bit until page cleanup. The fence
     *  key for a node is always present
 	*
-    *  Groups of pages called segments from the b-tree are optionally cached
+    *  Groups of pages called segments from the bltindex are optionally cached
     *  with a memory mapped pool.  A hash table is used to keep track of the
     *  cached segments.  This behaviour is controlled by the cache block size
     *  parameter to BLT::open.

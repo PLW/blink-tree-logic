@@ -97,13 +97,13 @@ void* indexOp( void* rawArg ) {
 
     switch (args->_type | 0x20) {
     case 'a': {
-        Logger::logInfo( thread, "started latch mgr audit", __LOC__ );
+        Logger::logInfo( thread, "\n[[ latch mgr audit ]]", __LOC__ );
         blt->latchAudit();
         break;
     }
     case 'w': {
         {
-            ostringstream oss( "started indexing for " );
+            ostringstream oss( "\n[[ indexing ]] " );
             oss << args->_infile;
             Logger::logInfo( thread, oss.str(), __LOC__ );
         }
@@ -111,22 +111,22 @@ void* indexOp( void* rawArg ) {
         FILE* in = fopen( args->_infile, "rb" );
         if (in) {
             int len = 0;
-            int line = 0;
+            int docid = 0;
             int ch;
 
             while (ch = getc(in), ch != EOF) {
                 if (ch == '\n') {
-                    line++;
+                    docid++;
 
                     if (args->_num == 1) {
-                        sprintf((char *)key+len, "%.9d", 1000000000 - line), len += 9;
+                        sprintf((char *)key+len, "%.9d", 1000000000 - docid), len += 9;
                     }
                     else if (args->_num) {
-                        sprintf((char *)key+len, "%.9d", line + args->_idx * args->_num), len += 9;
+                        sprintf((char *)key+len, "%.9d", docid + args->_idx * args->_num), len += 9;
                     }
 
-                    if (blt->insertKey( key, len, 0, line, *tod )) {
-                        cout << __TRACE__ << "Error " << blt->getLastError() << ", Line " << line << endl;
+                    if (blt->insertKey( key, len, 0, docid, *tod )) {
+                        cout << __TRACE__ << "Error " << blt->getLastError() << ", docid " << docid << endl;
                         exit(0);
                     }
                     len = 0;
@@ -137,7 +137,7 @@ void* indexOp( void* rawArg ) {
             }
             {
                 ostringstream oss( "finished " );
-                oss << args->_infile << " for " << line << " keys";
+                oss << args->_infile << " for " << docid << " keys";
                 Logger::logInfo( thread, oss.str(), __LOC__ );
             }
         }
@@ -145,7 +145,7 @@ void* indexOp( void* rawArg ) {
     }
     case 'd': {
         {
-            ostringstream oss( "started deleting keys for " );
+            ostringstream oss( "\n[[ started deleting keys ]] : " );
             oss << args->_infile;
             Logger::logInfo( thread, oss.str(), __LOC__ );
         }
@@ -187,7 +187,7 @@ void* indexOp( void* rawArg ) {
     }
     case 'f': {
         {
-            ostringstream oss( "started finding keys for " );
+            ostringstream oss( "\n[[ finding keys for ]] " );
             oss << args->_infile;
             Logger::logInfo( thread, oss.str(), __LOC__ );
         }
@@ -234,7 +234,7 @@ void* indexOp( void* rawArg ) {
         break;
     }
     case 's': {
-        Logger::logInfo( thread, "started scanning", __LOC__ );
+        Logger::logInfo( thread, "\n[[ scanning ]]", __LOC__ );
 
         uint cnt = 0;
         PageId pageNo = LEAF_page;
@@ -277,7 +277,7 @@ void* indexOp( void* rawArg ) {
         break;
     }
     case 'c': {
-        Logger::logInfo( thread, "started counting", __LOC__ );
+        Logger::logInfo( thread, "\n[[ counting ]]", __LOC__ );
         uint cnt = 0;
         PageId pageNo = LEAF_page;
         PageId next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
