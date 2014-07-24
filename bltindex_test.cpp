@@ -80,7 +80,7 @@ typedef struct {
 //
 void* indexOp( void* rawArg ) {
     uchar key[256];
-    PageSet set[1];
+    PageSet set[1]; // set -> stack alloc
 
     ThreadArg* args = (ThreadArg *)rawArg;
     BufferMgr* mgr = args->_mgr;
@@ -103,9 +103,8 @@ void* indexOp( void* rawArg ) {
     }
     case 'w': {
         {
-            ostringstream oss( "\n[[ indexing ]] " );
-            oss << args->_infile;
-            Logger::logInfo( thread, oss.str(), __LOC__ );
+            __OSS__( "\n[[ indexing ]] " << args->_infile );
+            Logger::logInfo( thread, __ss__, __LOC__ );
         }
 
         FILE* in = fopen( args->_infile, "rb" );
@@ -136,18 +135,16 @@ void* indexOp( void* rawArg ) {
                 }
             }
             {
-                ostringstream oss( "finished " );
-                oss << args->_infile << " for " << docid << " keys";
-                Logger::logInfo( thread, oss.str(), __LOC__ );
+                __OSS__( "finished " << args->_infile << " for " << docid << " keys" );
+                Logger::logInfo( thread, __ss__, __LOC__ );
             }
         }
         break;
     }
     case 'd': {
         {
-            ostringstream oss( "\n[[ started deleting keys ]] : " );
-            oss << args->_infile;
-            Logger::logInfo( thread, oss.str(), __LOC__ );
+            __OSS__( "\n[[ started deleting keys ]] : " << args->_infile );
+            Logger::logInfo( thread, __ss__, __LOC__ );
         }
 
         FILE* in = fopen( args->_infile, "rb" );
@@ -178,18 +175,16 @@ void* indexOp( void* rawArg ) {
                 }
             }
             {
-                ostringstream oss( "finished " );
-                oss << args->_infile << " for " << line << " keys";
-                Logger::logInfo( thread, oss.str(), __LOC__ );
+                __OSS__( "finished " << args->_infile << " for " << line << " keys" );
+                Logger::logInfo( thread, __ss__, __LOC__ );
             }
         }
         break;
     }
     case 'f': {
         {
-            ostringstream oss( "\n[[ finding keys for ]] " );
-            oss << args->_infile;
-            Logger::logInfo( thread, oss.str(), __LOC__ );
+            __OSS__( "\n[[ finding keys for ]] " << args->_infile );
+            Logger::logInfo( thread, __ss__, __LOC__ );
         }
 
         FILE* in = fopen( args->_infile, "rb" );
@@ -226,9 +221,8 @@ void* indexOp( void* rawArg ) {
                 }
             }
             {
-                ostringstream oss( "finished " );
-                oss << args->_infile << " for " << line << " keys, found " << found;
-                Logger::logInfo( thread, oss.str(), __LOC__ );
+                __OSS__( "finished " << args->_infile << " for " << line << " keys, found " << found );
+                Logger::logInfo( thread, __ss__, __LOC__ );
             }
         }
         break;
@@ -237,17 +231,17 @@ void* indexOp( void* rawArg ) {
         Logger::logInfo( thread, "\n[[ scanning ]]", __LOC__ );
 
         uint cnt = 0;
-        PageId pageNo = LEAF_page;
+        PageId pageId = LEAF_page;
         PageId next;
 
         do {
-            if ((set->_pool = mgr->pinPool( pageNo, thread ))) {
-                set->_page = mgr->page( set->_pool, pageNo, thread );
+            if ((set->_pool = mgr->pinPool( pageId, thread ))) {
+                set->_page = mgr->page( set->_pool, pageId, thread );
             }
             else {
                 break;
             }
-            set->_latch = mgr->getLatchMgr()->pinLatch( pageNo, thread );
+            set->_latch = mgr->getLatchMgr()->pinLatch( pageId, thread );
             mgr->lockPage( LockRead, set->_latch, thread );
             next = Page::getid( set->_page->_right );
             cnt += set->_page->_act;
@@ -264,14 +258,13 @@ void* indexOp( void* rawArg ) {
             mgr->unlockPage( LockRead, set->_latch, thread );
             mgr->getLatchMgr()->unpinLatch( set->_latch, thread );
             mgr->unpinPool( set->_pool, thread );
-        } while ((pageNo = next));
+        } while ((pageId = next));
 
         --cnt;    // remove stopper key
 
         {
-            ostringstream oss( " Total keys read " );
-            oss << cnt;
-            Logger::logInfo( thread, oss.str(), __LOC__ );
+            __OSS__( " Total keys read " << cnt );
+            Logger::logInfo( thread, __ss__, __LOC__ );
         }
 
         break;
@@ -279,29 +272,27 @@ void* indexOp( void* rawArg ) {
     case 'c': {
         Logger::logInfo( thread, "\n[[ counting ]]", __LOC__ );
         uint cnt = 0;
-        PageId pageNo = LEAF_page;
+        PageId pageId = LEAF_page;
         PageId next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
 
-        while (pageNo < Page::getid(mgr->getLatchMgr()->_alloc->_right)) {
-            PageId off = pageNo << mgr->getPageBits();
+        while (pageId < Page::getid(mgr->getLatchMgr()->_alloc->_right)) {
+            PageId off = pageId << mgr->getPageBits();
             pread( mgr->getFD(), blt->getFrame(), mgr->getPageSize(), off );
             if (!blt->getFrame()->_free && !blt->getFrame()->_level) cnt += blt->getFrame()->_act;
-            if (pageNo > LEAF_page) next = pageNo + 1;
-            pageNo = next;
+            if (pageId > LEAF_page) next = pageId + 1;
+            pageId = next;
         }
         
         cnt--;    // remove stopper key
         {
-            ostringstream oss( "Total keys read " );
-            oss << cnt;
-            Logger::logInfo( thread, oss.str(), __LOC__ );
+            __OSS__( "Total keys read " << cnt );
+            Logger::logInfo( thread, __ss__, __LOC__ );
         }
         break;
     }
     default: {
-        ostringstream oss( "Unrecognized command type: " );
-        oss << args->_type;
-        Logger::logError( thread, oss.str(), __LOC__ );
+        __OSS__( "Unrecognized command type: " << args->_type );
+        Logger::logError( thread, __ss__, __LOC__ );
     }
     }
 

@@ -101,7 +101,7 @@ namespace mongo {
     *  loadpage interface object
     */
     struct PageSet {
-        PageId    _pageNo;          // current page number
+        PageId    _pageId;          // current page number
         Page*     _page;            // current page pointer
         Pool*     _pool;            // current page pool
         LatchSet* _latch;           // current page latch set

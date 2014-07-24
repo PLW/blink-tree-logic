@@ -30,6 +30,7 @@
 #pragma once
 
 #include "common.h"
+#include <string>
 #include <string.h>
     
 namespace mongo {
@@ -66,6 +67,13 @@ namespace mongo {
             if (len1 > len2) return 1;
             if (len1 < len2) return -1;
             return 0;
+        }
+
+        std::string toString() const {
+            char buf[ _len + 1 ];
+            strncpy( buf, (const char *)_key, _len );
+            buf[ _len ] = 0;
+            return std::string( buf );
         }
 
         // data

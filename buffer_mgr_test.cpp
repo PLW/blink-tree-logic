@@ -59,10 +59,10 @@ int main( int argc, char* argv[] ) {
 
     int fd = open( fname, O_RDWR | O_CREAT, 0666 );
 
-    uint pageNo = 7;
-    size_t nread = pread( fd, page, pageSize, pageNo << pageBits );
+    uint pageId = 7;
+    size_t nread = pread( fd, page, pageSize, pageId << pageBits );
     if (nread < pageSize) {
-        __OSS__( "readPage(" << pageNo << ") error: " << strerror(errno) );
+        __OSS__( "readPage(" << pageId << ") error: " << strerror(errno) );
         Logger::logError( "main", __ss__, __LOC__ );
         return 1;
     }

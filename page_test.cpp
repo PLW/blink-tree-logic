@@ -52,10 +52,10 @@ int main( int argc, char* argv[] ) {
     Page* page = (Page*) malloc( pageSize );
     int fd = open( fname, O_RDWR | O_CREAT, 0666 );
 
-    for (uint32_t pageNo=0; pageNo<10; ++pageNo) {
-        size_t nread = pread( fd, page, pageSize, pageNo << pageBits );
+    for (uint32_t pageId=0; pageId<10; ++pageId) {
+        size_t nread = pread( fd, page, pageSize, pageId << pageBits );
         if (nread < pageSize) {
-            cout << "readPage(" << pageNo <<") error: " << strerror(errno) << endl;
+            cout << "readPage(" << pageId <<") error: " << strerror(errno) << endl;
             return 1;
         }
         cout << *page << endl;

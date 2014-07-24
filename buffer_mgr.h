@@ -217,7 +217,7 @@ namespace mongo {
 	    ushort _poolMask;           // total number of pages in mmap segment - 1
 	    ushort _hashSize;           // size of Hash Table for pool entries
 	    volatile uint _evicted;     // last evicted hash table slot
-	    ushort* _hash;              // pool index for hash entries <-- XXX fix this name!
+	    ushort* _hash;              // hash entries
 	    SpinLatch* _latch;          // latches for hash table slots <-- XXX fix this name!
 	    LatchMgr* _latchMgr;        // mapped latch page from allocation page
 	    Pool* _pool;                // memory pool page segments

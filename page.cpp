@@ -49,18 +49,17 @@ namespace mongo {
     *
     *  A key consists of a length byte, two bytes of index number (0 - 65534),
     *  and up to 253 bytes of key value.  Duplicate keys are discarded.
-    *  Associated with each key is a 48 bit record-id.
+    *  Associated with each key is a 48 bit docid.
     *
-    *  The b-tree pages are linked with right pointers to facilitate enumerators,
+    *  The bltindex pages are linked with right pointers to facilitate enumerators,
     *  and provide for concurrency.
     *
     *  Deleted keys are tombstoned with a dead bit until page cleanup. The fence key
     *  for a node is always present, even after deletion and cleanup.
     *
     *  Deleted leaf pages are reclaimed on a free list.
-    *  The upper levels of the btree are fixed on creation.
+    *  The upper levels of the bltindex are fixed on creation.
     *
-    *  Access macros to address slot and key values from the page.
     *  Page slots use 1-based indexing.
     */
 

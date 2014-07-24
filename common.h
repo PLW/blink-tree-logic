@@ -64,7 +64,7 @@ namespace mongo {
     #define MIN_level       2
     #define MAX_level       15
     
-    // page types
+    // static page id's
     #define ALLOC_page      0
     #define ROOT_page       1
     #define LEAF_page       2

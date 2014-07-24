@@ -266,7 +266,6 @@ namespace mongo {
         free( (void *)_latch );
     }
     
-
     /**
     *  find segment in pool
     *  must be called with hashslot at hashIndex locked
@@ -275,15 +274,11 @@ namespace mongo {
     Pool* BufferMgr::findPool( PageId pageId, uint hashIndex, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        // compute start of hash chain in pool
-        Pool* pool;
+        // compute start of hash chain
         uint slot = _hash[ hashIndex ];
-        if (slot) {
-            pool = &_pool[ slot ];
-        }
-        else {
-            return NULL;
-        }
+        if (!slot) return NULL;
+
+        Pool* pool = &_pool[ slot ];
         pageId &= ~(_poolMask);
 
         while (pool->_basePage != pageId) {
@@ -525,12 +520,8 @@ namespace mongo {
 
     #define LOADPAGE_TRACE  false
 
-    int BufferMgr::loadPage( PageSet* set,
-                             const uchar* key,
-                             uint keylen,
-                             uint level,
-                             LockMode inputMode,
-                             const char* thread )
+    int BufferMgr::loadPage( PageSet* set, const uchar* key, uint keylen,
+                             uint level, LockMode inputMode, const char* thread )
     {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
     
@@ -551,7 +542,7 @@ namespace mongo {
             LockMode mode = (drill == level) ? inputMode : LockRead; 
 
             set->_latch = _latchMgr->pinLatch( pageId, thread );
-            set->_pageNo = pageId;
+            set->_pageId = pageId;
 
             // pin page contents
             if ( (set->_pool = pinPool( pageId, thread )) ) {
@@ -592,7 +583,7 @@ namespace mongo {
 
             // re-read and re-lock root after finding root level
             if (set->_page->_level != drill) {
-                if (set->_pageNo != ROOT_page) {
+                if (set->_pageId != ROOT_page) {
                     __OSS__( "level!=drill  on page: " << pageId );
                     Logger::logError( thread, __ss__, __LOC__ );
                     _err = BLTERR_struct;
@@ -609,7 +600,7 @@ namespace mongo {
                 }
             }
 
-            prevPageId = set->_pageNo;
+            prevPageId = set->_pageId;
             prevLatch  = set->_latch;
             prevPool   = set->_pool;
             prevMode   = mode;
@@ -741,7 +732,7 @@ slideright: //  or slide right into next page
 
         // store chain in second right
         Page::putid( set->_page->_right, Page::getid( _latchMgr->_alloc[1]._right ) );
-        Page::putid( _latchMgr->_alloc[1]._right, set->_pageNo);
+        Page::putid( _latchMgr->_alloc[1]._right, set->_pageId);
         set->_page->_free = 1;
 
         // unlock released page
@@ -849,23 +840,23 @@ slideright: //  or slide right into next page
         }
     
         PageId next = _latchMgr->_nlatchPage + LATCH_page;
-        PageId pageNo = LEAF_page;
+        PageId pageId = LEAF_page;
         Page* _frame = (Page *)malloc( _pageSize );
     
-        while (pageNo < Page::getid(_latchMgr->_alloc->_right)) {
-            pread( _fd, _frame, _pageSize, pageNo << _pageBits );
+        while (pageId < Page::getid(_latchMgr->_alloc->_right)) {
+            pread( _fd, _frame, _pageSize, pageId << _pageBits );
             if (!_frame->_free) {
                 for (uint idx = 0; idx++ < _frame->_cnt - 1; ) {
                     BLTKey* key = Page::keyptr(_frame, idx+1);
                     if (BLTKey::keycmp( Page::keyptr(_frame, idx), key->_key, key->_len ) >= 0) {
-                        __OSS__( "page " << pageNo << " idx" << idx << " out of order" );
+                        __OSS__( "page " << pageId << " idx" << idx << " out of order" );
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }
                 }
             }
     
-            if (pageNo > LEAF_page) next = pageNo + 1;
-            pageNo = next;
+            if (pageId > LEAF_page) next = pageId + 1;
+            pageId = next;
         }
     }
 

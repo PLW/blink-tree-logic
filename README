@@ -1,3 +1,6 @@
+# The B-LInk tree code is based on research published by Kark Malbrain of
+# the University of California, Berkeley.  The code is derived and re-written
+# from original 'C' source code placed in the public domain by Karl Malbrain.
 
 # compile everything
 g++ -O3 -o random_keys random_keys.cpp
