@@ -28,6 +28,7 @@
 */
 
 #include "common.h"
+#include "blterr.h"
 #include "bltkey.h"
 #include "buffer_mgr.h"
 #include "latchMgr.h"
@@ -47,7 +48,6 @@
 namespace mongo {
 
     BufferMgr* BufferMgr::create( const char* name,
-                                  uint mode,
                                   uint bits0,
                                   uint poolMax,
                                   uint segSize,
@@ -86,8 +86,8 @@ namespace mongo {
 
         mgr->_fd = fd;
 
-        uint cacheBlockSize = 4096;    // minimum mmap segment size for unix
-        LatchMgr* latchMgr = (LatchMgr*)malloc( BLT_maxpage );
+        uint cacheBlockSize = MMAP_MIN_SIZE;                    // (e.g.) 4KB
+        LatchMgr* latchMgr = (LatchMgr*)malloc( BLT_maxpage );  // (e.g.) 16MB
 
         uint amt[1];
         *amt = 0;
@@ -105,33 +105,34 @@ namespace mongo {
                 free(latchMgr);
                 return NULL;
             }
-        } else if (BLT_ro ==  mode) {
-            Logger::logError( "main", "read only mode not currently supported.", __LOC__ );
-            free(latchMgr);
-            mgr->close( "main" );
-            return NULL;
         }
     
         uint pageSize = (1 << bits);
         mgr->_pageSize = pageSize;
         mgr->_pageBits = bits;
         mgr->_poolMax  = poolMax;
-        mgr->_mode = mode;
 
         if (cacheBlockSize < pageSize) {
             cacheBlockSize = pageSize;
         }
-    
-        // mask for partial memmaps
+
+        // _poolMask is used
         mgr->_poolMask = (cacheBlockSize >> bits) - 1;
-    
-        // see if requested size of pages per memmap is greater
         if ((1 << segSize) > mgr->_poolMask) {
             mgr->_poolMask = (1 << segSize) - 1;
         }
     
         mgr->_segBits = 0;
-        while ( (1 << mgr->_segBits) <= mgr->_poolMask) { mgr->_segBits++; }
+        for (uint n = mgr->_poolMask; n; n >>= 1) ++mgr->_segBits;
+
+        // what is all this about?
+        // In most sane cases, poolMask = (1<<segSize) - 1, and segBits = segSize.
+        // Conceivably, you chose small page size, say 512B, and few pages per segment,
+        // say 4 pages per segment, segSize = 2.  You have segments smaller than the
+        // default mmap block size.  Then
+        //     poolMask = (4096>>9)-1 == 7,
+        //     (1<<2) > 7 => false, and
+        //     poolMask == 0111 (base 2), and 3 == segBits != segSize.
     
         mgr->_hashSize = hashSize;
         mgr->_pool  = (Pool*)calloc( poolMax, sizeof(Pool) );
@@ -154,7 +155,7 @@ namespace mongo {
 
         memset( latchMgr, 0, pageSize );
         uint nlatchPage = BLT_latchtable / (pageSize / sizeof(LatchSet)) + 1; 
-        Page::putid( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage);
+        Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage);
         latchMgr->_alloc->_bits = bits;
         latchMgr->_nlatchPage = nlatchPage;
         latchMgr->_latchTotal = nlatchPage * (pageSize / sizeof(LatchSet));
@@ -181,8 +182,8 @@ namespace mongo {
     
         for (uint level = MIN_level; level--; ) {
             Page::slotptr(latchMgr->_alloc, 1)->_off = pageSize - 3;
-            Page::putid( Page::slotptr(latchMgr->_alloc, 1)->_id,
-                            level ? MIN_level - level + 1 : 0); // next lower page number
+            Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,
+                            level ? MIN_level - level + 1 : 0); // next docid
             BLTKey* key = Page::keyptr(latchMgr->_alloc, 1);
             key->_len = 2;        // create stopper key
             key->_key[0] = 0xff;
@@ -220,11 +221,12 @@ namespace mongo {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
  
         int prot = PROT_READ | PROT_WRITE;
-        uint pageSize = _pageSize;
-        int fd = _fd;
-        off_t latchMgrOffset = ALLOC_page * pageSize;
 
-        _latchMgr = (LatchMgr *)mmap( 0, pageSize, prot, MAP_SHARED, fd, latchMgrOffset );
+        uint  latchMgrSize   = _pageSize;
+        off_t latchMgrOffset = ALLOC_page * _pageSize;
+
+        _latchMgr = (LatchMgr *)mmap( 0, latchMgrSize, prot, MAP_SHARED, _fd, latchMgrOffset );
+
         if (_latchMgr == MAP_FAILED) {
             __OSS__( "mmap failed on 'alloc' page, syserr: " << strerror(errno) );
             Logger::logError( thread, __ss__, __LOC__ );
@@ -232,9 +234,10 @@ namespace mongo {
             return false;
         }
 
-        uint latchSetsSize  = _latchMgr->_nlatchPage * pageSize;
-        off_t latchSetsOffset = LATCH_page * pageSize;
-        _latchMgr->_latchSets = (LatchSet *)mmap( 0, latchSetsSize, prot, MAP_SHARED, fd, latchSetsOffset );
+        uint  latchSetsSize   = _latchMgr->_nlatchPage * _pageSize;
+        off_t latchSetsOffset =  LATCH_page * _pageSize;
+
+        _latchMgr->_latchSets =  (LatchSet *)mmap( 0, latchSetsSize, prot, MAP_SHARED, _fd, latchSetsOffset );
 
         if (MAP_FAILED == _latchMgr->_latchSets) {
             __OSS__( "mmap failed on 'latch' page, syserr: " << strerror(errno) );
@@ -267,11 +270,9 @@ namespace mongo {
     }
     
     /**
-    *  find segment in pool
-    *  must be called with hashslot at hashIndex locked
-    *  @return NULL if not there, otherwise return node
+    *  Find segment in pool
     */
-    Pool* BufferMgr::findPool( PageId pageId, uint hashIndex, const char* thread ) {
+    Pool* BufferMgr::findPool( PageNo pageNo, uint hashIndex, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         // compute start of hash chain
@@ -279,22 +280,25 @@ namespace mongo {
         if (!slot) return NULL;
 
         Pool* pool = &_pool[ slot ];
-        pageId &= ~(_poolMask);
+        pageNo &= ~(_poolMask);
 
-        while (pool->_basePage != pageId) {
+        while (pool->_basePage != pageNo) {
             if ( (pool = (Pool *)pool->_hashNext) ) continue;
             return NULL;
         }
         return pool;
     }
 
-	void BufferMgr::linkHash( Pool* pool, PageId pageId, int hashIndex, const char* thread ) {
+    /**
+    *  Add a segment to the hash table
+    */
+	void BufferMgr::linkHash( Pool* pool, PageNo pageNo, int hashIndex, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != pool );
 
 	    pool->_hashPrev = pool->_hashNext = NULL;
-	    pool->_basePage = pageId & ~(_poolMask);
+	    pool->_basePage = pageNo & ~(_poolMask);
 	    pool->_pin = CLOCK_bit + 1;
 	
 	    uint slot = _hash[ hashIndex ];
@@ -306,27 +310,33 @@ namespace mongo {
 	    _hash[ hashIndex ] = pool->_slot;
 	}
 	
-	BLTERR BufferMgr::mapSegment( Pool* pool, PageId pageId, const char* thread ) {
+	BLTERR BufferMgr::mapSegment( Pool* pool, PageNo pageNo, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-	    off_t off = (pageId & ~_poolMask) << _pageBits;
-	    off_t limit = off + ((_poolMask + 1) << _pageBits);
-        size_t len = (_poolMask + 1) << _pageBits;
-	    int prot = PROT_READ | (BLT_ro==_mode ? 0 : PROT_WRITE );
-	    if (MAP_FAILED == (pool->_map = (char *)mmap( 0, len, prot, MAP_SHARED, _fd, off ))) {
-            __OSS__( "mmap segment " << pageId << " failed" );
+        // ex. ( 0..31 & ~31) << 15 => 0
+        // ex. (32..63 & ~31) << 15 => 1048576, etc.
+        // (i.e.) each segment of 32 32KB pages == 1MB
+	    off_t  segOffset = (pageNo & ~_poolMask) << _pageBits;
+
+        // ex.
+        size_t segLength = (_poolMask + 1) << _pageBits;
+
+	    int prot = PROT_READ | PROT_WRITE;
+
+	    if (MAP_FAILED == (pool->_map = (char *)mmap( 0, segLength, prot, MAP_SHARED, _fd, segOffset ))) {
+            __OSS__( "mmap segment " << pageNo << " failed" );
             Logger::logDebug( thread, __ss__, __LOC__ );
 	        return BLTERR_map;
         }
 	    return BLTERR_ok;
 	}
 
-	Page* BufferMgr::page( Pool* pool, PageId pageId, const char* thread ) {
+	Page* BufferMgr::page( Pool* pool, PageNo pageNo, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != pool );
 
-	    uint subpage = (uint)(pageId & _poolMask); // page within mapping
+	    uint subpage = (uint)(pageNo & _poolMask); // page within mapping
 	    Page* page = (Page*)(pool->_map + (subpage << _pageBits));
 	    return page;
 	}
@@ -338,15 +348,15 @@ namespace mongo {
         assert( NULL != pool );
 	}
 	
-	Pool* BufferMgr::pinPool( PageId pageId, const char* thread ) {
+	Pool* BufferMgr::pinPool( PageNo pageNo, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
 	    // lock hash table chain
-	    uint hashIndex = (uint)(pageId >> _segBits) % _hashSize;
+	    uint hashIndex = (uint)(pageNo >> _segBits) % _hashSize;
 	    SpinLatch::spinWriteLock( &_latch[ hashIndex ], thread );
 	
 	    // look up in hash table
-	    Pool* pool = findPool( pageId, hashIndex, thread );
+	    Pool* pool = findPool( pageNo, hashIndex, thread );
 	    if (pool) {
 	        __sync_fetch_and_or( &pool->_pin, CLOCK_bit);
 	        __sync_fetch_and_add( &pool->_pin, 1);
@@ -361,13 +371,13 @@ namespace mongo {
 	        pool = &_pool[ slot ];
 	        pool->_slot = slot;
 	
-	        if (mapSegment( pool, pageId, thread )) {
-                __OSS__( "mapSegment " << pageId << " failed" );
+	        if (mapSegment( pool, pageNo, thread )) {
+                __OSS__( "mapSegment " << pageNo << " failed" );
                 Logger::logError( thread, __ss__, __LOC__ );
 	            return NULL;
             }
 	
-	        linkHash( pool, pageId, hashIndex, thread );
+	        linkHash( pool, pageNo, hashIndex, thread );
 	        SpinLatch::spinReleaseWrite( &_latch[ hashIndex ], thread );
 	        return pool;
 	    }
@@ -416,13 +426,13 @@ namespace mongo {
 	        pool->_map = NULL;
 	
 	        // create new pool mapping and link into hash table
-	        if (mapSegment( pool, pageId, thread )) {
-                __OSS__( "mapSegment " << pageId << " failed" );
+	        if (mapSegment( pool, pageNo, thread )) {
+                __OSS__( "mapSegment " << pageNo << " failed" );
                 Logger::logError( thread, __ss__, __LOC__ );
                 return NULL;
             }
 	
-	        linkHash( pool, pageId, hashIndex, thread );
+	        linkHash( pool, pageNo, hashIndex, thread );
 	        SpinLatch::spinReleaseWrite( &_latch[ hashIndex ], thread );
 	        return pool;
 
@@ -432,12 +442,12 @@ namespace mongo {
     /**
     *  place write, read, or parent lock on requested page
     */
-    void BufferMgr::lockPage( LockMode mode, LatchSet* set, const char* thread ) {
+    void BufferMgr::lockPage( LockMode lockMode, LatchSet* set, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != set );
 
-        switch( mode ) {
+        switch( lockMode ) {
         case LockRead:   { SpinLatch::spinReadLock( set->_readwr, thread ); break;  }
         case LockWrite:  { SpinLatch::spinWriteLock( set->_readwr, thread ); break; }
         case LockAccess: { SpinLatch::spinReadLock( set->_access, thread ); break;  }
@@ -449,12 +459,12 @@ namespace mongo {
     /**
     *  remove write, read, or parent lock on requested page
     */
-    void BufferMgr::unlockPage( LockMode mode, LatchSet* set, const char* thread ) {
+    void BufferMgr::unlockPage( LockMode lockMode, LatchSet* set, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != set );
 
-        switch (mode) {
+        switch (lockMode) {
         case LockRead:   { SpinLatch::spinReleaseRead( set->_readwr, thread ); break;  }
         case LockWrite:  { SpinLatch::spinReleaseWrite( set->_readwr, thread ); break; }
         case LockAccess: { SpinLatch::spinReleaseRead( set->_access, thread ); break;  }
@@ -466,7 +476,7 @@ namespace mongo {
     /**
     * allocate a new page and write page into it
     */
-    PageId BufferMgr::newPage( Page* inputPage, const char* thread ) {
+    PageNo BufferMgr::newPage( Page* inputPage, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
     
         assert( NULL != inputPage );
@@ -478,7 +488,7 @@ namespace mongo {
         PageSet set[1];
         int reuse;
 
-        PageId newPage = Page::getid( _latchMgr->_alloc[1]._right );
+        PageNo newPage = Page::getPageNo( _latchMgr->_alloc[1]._right );
 
         if (newPage) {
             if ( (set->_pool = pinPool( newPage, thread )) ) {
@@ -488,16 +498,19 @@ namespace mongo {
                 return 0;
             }
     
-            Page::putid( _latchMgr->_alloc[1]._right, Page::getid( set->_page->_right ) );
+            Page::putPageNo( _latchMgr->_alloc[1]._right, Page::getPageNo( set->_page->_right ) );
             unpinPool( set->_pool, thread );
             reuse = 1;
         } else {
-            newPage = Page::getid( _latchMgr->_alloc->_right );
-            Page::putid( _latchMgr->_alloc->_right, newPage+1 );
+            newPage = Page::getPageNo( _latchMgr->_alloc->_right );
+            Page::putPageNo( _latchMgr->_alloc->_right, newPage+1 );
             reuse = 0;
         }
+
         if (pwrite( _fd, inputPage, _pageSize, newPage << _pageBits) < _pageSize) {
-            _err = BLTERR_wrt;
+            __OSS__( "write new page syserr: " << strerror(errno) );
+            Logger::logError( thread, __ss__, __LOC__ );
+            _err = BLTERR_write;
             return 0;
         }
     
@@ -529,62 +542,62 @@ namespace mongo {
         assert( NULL != key );
 
         // start at root of btree and drill down
-        PageId pageId = ROOT_page;
-        uint drill = 0xff;
+        PageNo pageNo     = ROOT_page;
+        PageNo prevPageNo = 0;
+        uint drill        = 0xff;
 
-        PageId prevPageId = 0;
         LockMode prevMode;
         LatchSet* prevLatch;
         Pool* prevPool;
 
         do {
             // determine lock mode of drill level
-            LockMode mode = (drill == level) ? inputMode : LockRead; 
+            LockMode lockMode = (drill == level) ? inputMode : LockRead; 
 
-            set->_latch = _latchMgr->pinLatch( pageId, thread );
-            set->_pageId = pageId;
+            set->_latch = _latchMgr->pinLatch( pageNo, thread );
+            set->_pageNo = pageNo;
 
             // pin page contents
-            if ( (set->_pool = pinPool( pageId, thread )) ) {
-                set->_page = page( set->_pool, pageId, thread );
+            if ( (set->_pool = pinPool( pageNo, thread )) ) {
+                set->_page = page( set->_pool, pageNo, thread );
             }
             else {
-                __OSS__( "pinPool failed on page: " << pageId );
+                __OSS__( "pinPool failed for page: " << pageNo );
                 Logger::logError( thread, __ss__, __LOC__ );
                 return 0;
             }
 
             // obtain access lock using lock chaining with Access mode
-            if (pageId > ROOT_page) {
+            if (pageNo > ROOT_page) {
                 lockPage( LockAccess, set->_latch, thread );
             }
 
-            // release & unpin parent page
-            if (prevPageId) {
+            // release and unpin parent page
+            if (prevPageNo) {
                 unlockPage( prevMode, prevLatch, thread );
                 _latchMgr->unpinLatch( prevLatch, thread );
                 unpinPool( prevPool, thread );
-                prevPageId = 0;
+                prevPageNo = 0;
             }
 
             // obtain read lock using lock chaining
-            lockPage( mode, set->_latch, thread );
+            lockPage( lockMode, set->_latch, thread );
 
             if (set->_page->_free) {
-                __OSS__( "expecting free page: " << pageId );
+                __OSS__( "expecting free page: " << pageNo );
                 Logger::logError( thread, __ss__, __LOC__ );
                  _err = BLTERR_struct;
                 return 0;
             }
 
-            if (pageId > ROOT_page) {
+            if (pageNo > ROOT_page) {
                 unlockPage( LockAccess, set->_latch, thread );
             }
 
             // re-read and re-lock root after finding root level
             if (set->_page->_level != drill) {
-                if (set->_pageId != ROOT_page) {
-                    __OSS__( "level!=drill  on page: " << pageId );
+                if (set->_pageNo != ROOT_page) {
+                    __OSS__( "level!=drill  on page: " << set->_pageNo );
                     Logger::logError( thread, __ss__, __LOC__ );
                     _err = BLTERR_struct;
                     return 0;
@@ -593,21 +606,22 @@ namespace mongo {
                 drill = set->_page->_level;
 
                 if (inputMode != LockRead && drill == level) {
-                    unlockPage( mode, set->_latch, thread );
+                    unlockPage( lockMode, set->_latch, thread );
                     _latchMgr->unpinLatch( set->_latch, thread );
                     unpinPool( set->_pool, thread );
                     continue;
                 }
             }
 
-            prevPageId = set->_pageId;
+            prevPageNo = set->_pageNo;
             prevLatch  = set->_latch;
             prevPool   = set->_pool;
-            prevMode   = mode;
+            prevMode   = lockMode;
 
             // find key on page at this level, descend to requested level
             if (!set->_page->_kill) {
 
+                // find separator or leaf key slot
                 uint slot = findSlot( set, key, keylen, thread );
 
                 if (slot) {
@@ -622,16 +636,20 @@ namespace mongo {
                         }
                     }
 
-                    pageId = Page::getid( Page::slotptr(set->_page, slot)->_id );
+                    pageNo = Page::getPageNo( Page::slotptr(set->_page, slot)->_id );
+                    {
+                        __OSS__( "loadPage: next pageNo = " << pageNo );
+                        Logger::logDebug( thread, __ss__, __LOC__ );
+                    }
                     drill--;
                     continue;
                 }
             }
 
 slideright: //  or slide right into next page
-            pageId = Page::getid( set->_page->_right );
+            pageNo = Page::getPageNo( set->_page->_right );
 
-        } while (pageId);
+        } while (pageNo);
 
         // return error on end of right chain
         _err = BLTERR_struct;
@@ -654,7 +672,7 @@ slideright: //  or slide right into next page
         uint good = 0;
 
         // make stopper key an infinite fence value
-        if (Page::getid( set->_page->_right )) {
+        if (Page::getPageNo( set->_page->_right )) {
             higher++;
         }
         else {
@@ -681,16 +699,16 @@ slideright: //  or slide right into next page
     /**
     *  Read page from permanent location in BLTIndex file
     */
-    int BufferMgr::readPage( Page* page, PageId pageId, const char* thread ) {
+    int BufferMgr::readPage( Page* page, PageNo pageNo, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != page );
         
-        off_t off = (pageId << _pageBits);
+        off_t off = (pageNo << _pageBits);
         uint32_t pageSize = (1 << _pageBits);
 
         if (pread( _fd, page, pageSize, off ) < pageSize) {
-            __OSS__( "Error reading page " << pageId << ", syserr = " << strerror(errno) );
+            __OSS__( "Error reading page " << pageNo << ", syserr = " << strerror(errno) );
             Logger::logError( thread, __ss__, __LOC__ );
             return BLTERR_read;
         }
@@ -701,19 +719,19 @@ slideright: //  or slide right into next page
     *  Write page to permanent location in BLTIndex file.
     *  Clear the dirty bit
     */
-    int BufferMgr::writePage( Page* page, PageId pageId, const char* thread ) {
+    int BufferMgr::writePage( Page* page, PageNo pageNo, const char* thread ) {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != page );
 
-        off_t off = (pageId << _pageBits);
+        off_t off = (pageNo << _pageBits);
         uint32_t pageSize = (1 << _pageBits);
 
         page->_dirty = 0;
         if (pwrite( _fd, page, pageSize, off) < pageSize) {
-            __OSS__( "Error writing page " << pageId << ", syserr = " << strerror(errno) );
+            __OSS__( "Error writing page " << pageNo << ", syserr = " << strerror(errno) );
             Logger::logError( thread, __ss__, __LOC__ );
-            return BLTERR_wrt;
+            return BLTERR_write;
         }
         return 0;
     }
@@ -731,8 +749,8 @@ slideright: //  or slide right into next page
         SpinLatch::spinWriteLock( _latchMgr->_lock, thread );
 
         // store chain in second right
-        Page::putid( set->_page->_right, Page::getid( _latchMgr->_alloc[1]._right ) );
-        Page::putid( _latchMgr->_alloc[1]._right, set->_pageId);
+        Page::putPageNo( set->_page->_right, Page::getPageNo( _latchMgr->_alloc[1]._right ) );
+        Page::putPageNo( _latchMgr->_alloc[1]._right, set->_pageNo);
         set->_page->_free = 1;
 
         // unlock released page
@@ -749,20 +767,7 @@ slideright: //  or slide right into next page
     *
     */
     std::string BufferMgr::decodeLastErr() const {
-        switch (_err) {
-        case BLTERR_ok: return "ok";
-        case BLTERR_notfound: return "not found";
-        case BLTERR_struct: return "structural";
-        case BLTERR_ovflw: return "overflow";
-        case BLTERR_read: return "read";
-        case BLTERR_lock: return "lock";
-        case BLTERR_hash: return "hash";
-        case BLTERR_kill: return "kill";
-        case BLTERR_map: return "map";
-        case BLTERR_wrt: return "write";
-        case BLTERR_eof: return "eof";
-        default: return "unrecognized!!?";
-        }
+        return mongo::bltstrerror( _err );
     }
 
     #define LATCHAUDIT_TRACE    false
@@ -781,28 +786,28 @@ slideright: //  or slide right into next page
         for (ushort idx = 1; idx <= _latchMgr->_latchDeployed; idx++ ) {
 
             LatchSet* latchSet = &_latchMgr->_latchSets[ idx ];
-            PageId pageId = latchSet->_pageId;
+            PageNo pageNo = latchSet->_pageNo;
 
             if (*(uint *)latchSet->_readwr ) {
-                __OSS__( "latchset " << idx << " rw locked for page " << pageId );
+                __OSS__( "latchset " << idx << " rw locked for page " << pageNo );
                 Logger::logDebug( thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_readwr = 0;
     
             if (*(uint *)latchSet->_access ) {
-                __OSS__( "latchset " << idx << " access locked for page " << pageId );
+                __OSS__( "latchset " << idx << " access locked for page " << pageNo );
                 Logger::logDebug( thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_access = 0;
     
             if (*(uint *)latchSet->_parent ) {
-                __OSS__( "latchset " << idx << " parent locked for page " << pageId );
+                __OSS__( "latchset " << idx << " parent locked for page " << pageNo );
                 Logger::logDebug( thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_parent = 0;
     
             if (latchSet->_pin ) {
-                __OSS__( "latchset " << idx << " pinned for page " << pageId );
+                __OSS__( "latchset " << idx << " pinned for page " << pageNo );
                 Logger::logDebug( thread, __ss__, __LOC__ );
                 latchSet->_pin = 0;
             }
@@ -820,10 +825,10 @@ slideright: //  or slide right into next page
                 LatchSet* latchSet;
                 do {
                     latchSet = &_latchMgr->_latchSets[ idx ];
-                    PageId pageId = latchSet->_pageId;
+                    PageNo pageNo = latchSet->_pageNo;
 
                     if (*(uint *)latchSet->_busy ) {
-                        __OSS__( "latchset " << idx << " busy locked for page " << pageId );
+                        __OSS__( "latchset " << idx << " busy locked for page " << pageNo );
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }
                     *(uint *)latchSet->_busy = 0;
@@ -832,31 +837,31 @@ slideright: //  or slide right into next page
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }
                     if (latchSet->_pin ) {
-                        __OSS__( "latchset " << idx << " pinned for page " << pageId );
+                        __OSS__( "latchset " << idx << " pinned for page " << pageNo );
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }
                 } while ((idx = latchSet->_next));
             }
         }
     
-        PageId next = _latchMgr->_nlatchPage + LATCH_page;
-        PageId pageId = LEAF_page;
-        Page* _frame = (Page *)malloc( _pageSize );
+        PageNo next   = _latchMgr->_nlatchPage + LATCH_page;
+        PageNo pageNo = LEAF_page;
+        Page* _frame  = (Page *)malloc( _pageSize );
     
-        while (pageId < Page::getid(_latchMgr->_alloc->_right)) {
-            pread( _fd, _frame, _pageSize, pageId << _pageBits );
+        while (pageNo < Page::getPageNo(_latchMgr->_alloc->_right)) {
+            pread( _fd, _frame, _pageSize, pageNo << _pageBits );
             if (!_frame->_free) {
                 for (uint idx = 0; idx++ < _frame->_cnt - 1; ) {
                     BLTKey* key = Page::keyptr(_frame, idx+1);
                     if (BLTKey::keycmp( Page::keyptr(_frame, idx), key->_key, key->_len ) >= 0) {
-                        __OSS__( "page " << pageId << " idx" << idx << " out of order" );
+                        __OSS__( "page " << pageNo << " idx" << idx << " out of order" );
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }
                 }
             }
     
-            if (pageId > LEAF_page) next = pageId + 1;
-            pageId = next;
+            if (pageNo > LEAF_page) next = pageNo + 1;
+            pageNo = next;
         }
     }
 

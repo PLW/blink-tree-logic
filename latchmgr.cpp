@@ -205,7 +205,7 @@ namespace mongo {
             << "\n  prev = "   << _prev
             << "\n  pin = "    << _pin
             << "\n  hash = "   << _hash
-            << "\n  pageId = " << _pageId << "]";
+            << "\n  pageNo = " << _pageNo << "]";
         return oss.str();
     }
  
@@ -220,7 +220,7 @@ namespace mongo {
             "\n  prev = "    << set._prev <<
             "\n  pin = "    << set._pin <<
             "\n  hash = "   << set._hash <<
-            "\n  pageId = " << set._pageId << "]";
+            "\n  pageNo = " << set._pageNo << "]";
     }
  
 
@@ -229,7 +229,7 @@ namespace mongo {
     /**
     *
     */
-    void LatchMgr::latchLink( ushort hashIndex, ushort victim, PageId pageId, const char* thread ) {
+    void LatchMgr::latchLink( ushort hashIndex, ushort victim, PageNo pageNo, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         LatchSet* set = &_latchSets[ victim ];
@@ -238,7 +238,7 @@ namespace mongo {
             _latchSets[set->_next]._prev = victim;
         }
         _table[ hashIndex ]._slot = victim;
-        set->_pageId = pageId;
+        set->_pageNo = pageNo;
         set->_hash = hashIndex;
         set->_prev = 0;
     }
@@ -258,10 +258,10 @@ namespace mongo {
     *  find existing latchset or inspire new one
     *  @return with latchset pinned
     */
-    LatchSet* LatchMgr::pinLatch( PageId pageId, const char* thread ) {
+    LatchSet* LatchMgr::pinLatch( PageNo pageNo, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        ushort hashIndex = pageId % _latchHash;
+        ushort hashIndex = pageNo % _latchHash;
         ushort slot;
         ushort avail = 0;
         LatchSet* set;
@@ -272,7 +272,7 @@ namespace mongo {
         if ( (slot = _table[ hashIndex ]._slot) ){
             do {
                 set = &_latchSets[ slot ];
-                if (pageId == set->_pageId) break;
+                if (pageNo == set->_pageNo) break;
             } while ( (slot = set->_next) );
         }
     
@@ -290,7 +290,7 @@ namespace mongo {
         if ( (slot = _table[ hashIndex ]._slot) ) {
             do {
                 set = &_latchSets[ slot ];
-                if (pageId == set->_pageId) break;
+                if (pageNo == set->_pageNo) break;
                 if (!set->_pin && !avail) avail = slot;
             } while( (slot = set->_next) );
         }
@@ -299,7 +299,7 @@ namespace mongo {
         if (slot || (slot = avail)) {
             set = &_latchSets[ slot ];
             __sync_fetch_and_add( &set->_pin, 1 );
-            set->_pageId = pageId;
+            set->_pageNo = pageNo;
             SpinLatch::spinReleaseRead( _table[ hashIndex ]._latch, thread );
             return set;
         }
@@ -310,7 +310,7 @@ namespace mongo {
         if (victim < _latchTotal) {
             set = &_latchSets[ victim ];
             __sync_fetch_and_add( &set->_pin, 1 );
-            latchLink( hashIndex, victim, pageId, thread );
+            latchLink( hashIndex, victim, pageNo, thread );
             SpinLatch::spinReleaseWrite( _table[ hashIndex ]._latch, thread );
             return set;
         }
@@ -361,7 +361,7 @@ namespace mongo {
     
             SpinLatch::spinReleaseWrite( _table[idx]._latch, thread );
             __sync_fetch_and_add( &set->_pin, 1 );
-            latchLink( hashIndex, victim, pageId, thread );
+            latchLink( hashIndex, victim, pageNo, thread );
             SpinLatch::spinReleaseWrite( _table[ hashIndex ]._latch, thread );
             SpinLatch::spinReleaseWrite( set->_busy, thread );
             return set;

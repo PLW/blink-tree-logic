@@ -47,7 +47,7 @@ namespace mongo {
     *  Set 3:
     *      ParentMod:    Exclusive.  Change node parent keys.
     *
-    *                    AI  D   R   W  P
+    *                    AI  D   R   W   P
     *                   ---+---+---+---+---+
     *              AI  | Y | N | Y | Y | Y |
     *                  +---+---+---+---+---+
@@ -109,7 +109,7 @@ namespace mongo {
 	    volatile uint16_t _prev;    // prev entry in hash table chain
 	    volatile uint16_t _pin;     // number of outstanding locks
 	    volatile uint16_t _hash;    // hash slot entry is under
-	    volatile PageId _pageId;    // latch set page number
+	    volatile PageNo _pageNo;    // latch set page number
 
         friend std::ostream& operator<<( std::ostream& os, const LatchSet& set );
         std::string toString() const;
@@ -120,7 +120,7 @@ namespace mongo {
         /**
         *  link latch table entry into latch hash table
         */
-        void latchLink( ushort hashidx, ushort victim, PageId pageId, const char* thread );
+        void latchLink( ushort hashidx, ushort victim, PageNo pageNo, const char* thread );
 
         /**
         *  release latch pin
@@ -131,11 +131,11 @@ namespace mongo {
         *  find existing latchset or inspire new one
         *  return with latchset pinned
         */
-        LatchSet* pinLatch( PageId pageId, const char* thread );
+        LatchSet* pinLatch( PageNo pageNo, const char* thread );
 
     public:
 	    Page _alloc[2];             // next and free page numbers in right ptr
-	    SpinLatch _lock[1];         // allocation area spin latch
+	    SpinLatch _lock[1];         // allocation area latch
 	    ushort _latchDeployed;      // highest number of latch entries deployed
 	    ushort _nlatchPage;         // number of latch pages at BT_latch
 	    ushort _latchTotal;         // number of page latch entries

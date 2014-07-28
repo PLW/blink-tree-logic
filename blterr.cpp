@@ -42,7 +42,7 @@ namespace mongo {
         case BLTERR_hash: return "hash error";
         case BLTERR_kill: return "kill error";
         case BLTERR_map: return "mmap error";
-        case BLTERR_wrt: return "write error";
+        case BLTERR_write: return "write error";
         case BLTERR_eof: return "eof error";
         default: return "!!internal problem: unrecognized error code";
         }

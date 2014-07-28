@@ -41,7 +41,7 @@ namespace mongo {
         BLTERR_hash     =  6,
         BLTERR_kill     =  7,
         BLTERR_map      =  8,
-        BLTERR_wrt      =  9,
+        BLTERR_write    =  9,
         BLTERR_eof      = 10,
     } BLTERR;
 

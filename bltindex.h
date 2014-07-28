@@ -45,7 +45,7 @@
 namespace mongo {
     /**
     *  The page is allocated from low and high ends.  The key offsets and
-    *  PageId's are allocated from the bottom, while the text of the key is
+    *  PageNo's are allocated from the bottom, while the text of the key is
     *  allocated from the top.  When the two areas meet, the page is split.
     *
     *  A key consists of a length byte, two bytes of index number (0 - 65534),
@@ -105,14 +105,14 @@ namespace mongo {
 
         /**
         *  Insert new key into the btree at given level.
-        *  @param key  -  
-        *  @param keylen  -  
-        *  @param level  -  
-        *  @param pageId  -  
-        *  @param tod  -  
-        *  @return
+        *  @param key  -  key to insert
+        *  @param keylen  -  length of key to insert
+        *  @param level  -  needed by recursive insertions: for example insert => split => insert
+        *  @param pageNo  -  page number
+        *  @param tod  -  timestamp
+        *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        BLTERR insertKey( const uchar* key, uint keylen, uint level, PageId pageId, uint tod );
+        BLTERR insertKey( const uchar* key, uint keylen, uint level, PageNo pageNo, uint tod );
 
         /**
         *  find and delete key on page by marking delete flag bit:
@@ -125,12 +125,12 @@ namespace mongo {
         BLTERR deleteKey( const uchar* key, uint keylen, uint level );
 
         /**
-        *  Find key in leaf level and return PageId.
+        *  Find key in leaf level and return pageNo.
         *  @param key  -  
         *  @param keylen  -  
         *  @return
         */
-        PageId findKey( const uchar* key, uint keylen );
+        PageNo findKey( const uchar* key, uint keylen );
 
         /**
         *  Cache page of keys into cursor: return starting slot for given key
@@ -168,10 +168,10 @@ namespace mongo {
         /**
         *  Split the root and raise the height of the btree.
         *  @param leftkey  -  
-        *  @param pageId  -  
+        *  @param docId  -  
         *  @return
         */
-        BLTERR splitRoot( PageSet* root, const uchar* leftKey, PageId pageId );
+        BLTERR splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo );
 
         /**
         *  Split already locked full node: return unlocked.
@@ -190,14 +190,14 @@ namespace mongo {
 
         /**
         *  Fence key was deleted from a page: push new fence value upwards.
-        *  @param pageId  -  
+        *  @param docId  -  
         *  @param level  -  
         *  @return
         */
         BLTERR fixFenceKey( PageSet* set, uint level );
 
         BLTKey* getKey( uint slot );
-        PageId getPageId( uint slot );
+        PageNo getPageNo( uint slot );
         uint getTod( uint slot );
 
     protected:
@@ -206,7 +206,7 @@ namespace mongo {
 	    Page* _cursor;              // cached frame for start/next (not mapped)
 	    Page* _frame;               // spare frame for the page split (not mapped)
 	    Page* _zero;                // page frame for zeroes at end of file
-	    PageId _cursorPage;         // current cursor page number    
+	    PageNo _cursorPage;         // current cursor page number    
 	    uchar* _mem;                // frame, cursor, page memory buffer
 	    int _found;                 // last delete or insert was found
         BLTERR _err;                // most recent error

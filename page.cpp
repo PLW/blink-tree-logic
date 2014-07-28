@@ -32,6 +32,7 @@
 
 #include <errno.h>
 #include <iostream>
+#include <iomanip>
 #include <memory.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,34 +65,41 @@ namespace mongo {
     */
 
     /**
-    *  Move PageId bytes into a dest array.
+    *  Move Id bytes into a dest array.
     */
-    void Page::putid( uchar* dest, mongo::PageId id ) {
+    void Page::putPageNo( uchar* dest, PageNo pageNo ) {
         int i = IdLength;
         while (i--) {
-            dest[i] = (uchar)id;
-            id >>= 8;
+            dest[i] = (uchar)pageNo;
+            pageNo >>= 8;
         }
     }
     
     /**
-    *  Extract PageId bytes from a src array.
+    *  Extract Id bytes from a src array.
     */
-    mongo::PageId Page::getid( uchar* src ) {
-        mongo::PageId id = 0;
+    PageNo Page::getPageNo( uchar* src ) {
+        PageNo pageNo = 0;
         for (int i = 0; i < IdLength; ++i) {
-            id <<= 8;
-            id |= *src++; 
+            pageNo <<= 8;
+            pageNo |= *src++; 
         }
-        return id;
+        return pageNo;
     }
     
-    /**
-    *  debugging output
-    */
-    std::ostream& operator<<( std::ostream& os, const Page& page ) {
+    // debugging output
 
+    std::ostream& operator<<( std::ostream& os, const Slot& slot ) {
         return os <<
+            "Slot["
+            " offset = " << (uint32_t)slot._off <<
+            ", dead bit = " << (bool)slot._dead <<
+            ", timestamp = " << (uint32_t)slot._tod <<
+            ", id = " << std::setw(4) << Page::getPageNo( (uchar*)slot._id ) << ']';
+    }
+
+    std::ostream& operator<<( std::ostream& os, const Page& page ) {
+        os <<
             "Page["
             "\n  key count = "   << page._cnt <<
             "\n  active key count = "   << page._act <<
@@ -101,7 +109,17 @@ namespace mongo {
             "\n  page level = "   << (uint32_t)page._level <<
             "\n  page being deleted = "  << (bool)page._kill <<
             "\n  dirty bit = " << (bool)page._dirty <<
-            "\n]" << std::endl;
+            "\n]\n";
+
+        for (int slot = 1; slot <= page._cnt; ++slot) {
+            Slot* slotPtr = Page::slotptr( (Page*)&page, slot );
+            BLTKey* keyPtr = Page::keyptr( (Page*)&page, slot );
+            os << *slotPtr << " : "
+                << std::string( (const char*)keyPtr->_key, keyPtr->_len )
+                << std::endl;
+        }
+
+        return os << std::endl;
     }
 
 }   // namespace mongo

@@ -91,7 +91,7 @@ namespace mongo {
 
         uchar leftKey[256];
         uchar rightKey[256];
-        PageId pageId;
+        PageNo pageNo;
         BLTKey* key;
     
         // remove the old fence value
@@ -102,13 +102,13 @@ namespace mongo {
     
         key = Page::keyptr( set->_page, set->_page->_cnt);
         memcpy( leftKey, key, key->_len + 1 );
-        pageId = set->_pageId;
+        pageNo = set->_pageNo;
     
         _mgr->lockPage( LockParent, set->_latch, _thread );
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // insert new (now smaller) fence key
-        if (insertKey( leftKey+1, *leftKey, level+1, pageId, time(NULL) )) {
+        if (insertKey( leftKey+1, *leftKey, level+1, pageNo, time(NULL) )) {
             return _err;
         }
     
@@ -142,14 +142,14 @@ namespace mongo {
                 if (!Page::slotptr(root->_page, idx)->_dead) break;
             }
         
-            child->_pageId = Page::getid( Page::slotptr(root->_page, idx)->_id );
+            child->_pageNo = Page::getPageNo( Page::slotptr(root->_page, idx)->_id );
         
-            child->_latch = _mgr->getLatchMgr()->pinLatch( child->_pageId, _thread );
+            child->_latch = _mgr->getLatchMgr()->pinLatch( child->_pageNo, _thread );
             _mgr->lockPage( LockDelete, child->_latch, _thread );
             _mgr->lockPage( LockWrite, child->_latch, _thread );
         
-            if ( (child->_pool = _mgr->pinPool( child->_pageId, _thread )) ) {
-                child->_page = _mgr->page( child->_pool, child->_pageId, _thread );
+            if ( (child->_pool = _mgr->pinPool( child->_pageNo, _thread )) ) {
+                child->_page = _mgr->page( child->_pool, child->_pageNo, _thread );
             }
             else {
                 return _err;
@@ -223,7 +223,7 @@ namespace mongo {
         }
     
         // is this a collapsed root?
-        if (level > 1 && set->_pageId == ROOT_page && set->_page->_act == 1) {
+        if (level > 1 && set->_pageNo == ROOT_page && set->_page->_act == 1) {
             if (collapseRoot( set )) {
                 return _err;
             }
@@ -247,14 +247,14 @@ namespace mongo {
         memcpy( lowerFence, key, key->_len + 1 );
 
         // obtain lock on right page
-        right->_pageId = Page::getid( set->_page->_right );
-        right->_latch = _mgr->getLatchMgr()->pinLatch( right->_pageId, _thread );
+        right->_pageNo = Page::getPageNo( set->_page->_right );
+        right->_latch = _mgr->getLatchMgr()->pinLatch( right->_pageNo, _thread );
         _mgr->lockPage( LockWrite, right->_latch, _thread );
 
         // pin page contents
-        right->_pool = _mgr->pinPool( right->_pageId, _thread );
+        right->_pool = _mgr->pinPool( right->_pageNo, _thread );
         if (right->_pool) {
-            right->_page = _mgr->page( right->_pool, right->_pageId, _thread );
+            right->_page = _mgr->page( right->_pool, right->_pageNo, _thread );
         }
         else {
             return BLTERR_ok;
@@ -272,7 +272,7 @@ namespace mongo {
         memcpy( higherFence, key, key->_len + 1 );
     
         // mark right page deleted: point it to left page until we can post parent updates
-        Page::putid( right->_page->_right, set->_pageId );
+        Page::putPageNo( right->_page->_right, set->_pageNo );
         right->_page->_kill = 1;
     
         _mgr->lockPage( LockParent, right->_latch, _thread );
@@ -281,7 +281,7 @@ namespace mongo {
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // redirect higher key directly to our new node contents
-        if (insertKey( higherFence+1, *higherFence, level+1, set->_pageId, time(NULL)) ) {
+        if (insertKey( higherFence+1, *higherFence, level+1, set->_pageNo, time(NULL)) ) {
             return _err;
         }
     
@@ -304,15 +304,15 @@ namespace mongo {
     }
     
     /**
-    *  find key in leaf level and return pageId
+    *  find key in leaf level and return pageNo
     */
-    PageId BLTIndex::findKey( const uchar* inputKey, uint inputKeyLen ) {
+    PageNo BLTIndex::findKey( const uchar* inputKey, uint inputKeyLen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != inputKey );
 
         PageSet set[1];
-        PageId id = 0;
+        PageNo id = 0;
         BLTKey* key;
     
         uint slot = _mgr->loadPage( set, inputKey, inputKeyLen, 0, LockRead, _thread );
@@ -326,7 +326,7 @@ namespace mongo {
         // if key exists, return row-id, otherwise return 0
         if (slot <= set->_page->_cnt ) {
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
-                id = Page::getid( Page::slotptr( set->_page, slot )->_id );
+                id = Page::getPageNo( Page::slotptr( set->_page, slot )->_id );
             }
         }
     
@@ -399,14 +399,14 @@ namespace mongo {
     /**
     *  split the root and raise the height of the btree
     */
-    BLTERR BLTIndex::splitRoot( PageSet* root, const uchar* leftKey, PageId pageId2) {
+    BLTERR BLTIndex::splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo2) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != root );
         assert( NULL != leftKey );
 
         uint nxt = _mgr->getPageSize();
-        PageId left;
+        PageNo left;
     
         //  Obtain an empty page to use, and copy the current
         //  root contents into it, e.g. lower keys
@@ -423,7 +423,7 @@ namespace mongo {
     
         nxt -= *leftKey + 1;
         memcpy( (uchar *)root->_page + nxt, leftKey, *leftKey + 1 );
-        Page::putid( Page::slotptr(root->_page, 1 )->_id, left);
+        Page::putPageNo( Page::slotptr(root->_page, 1 )->_id, left);
         Page::slotptr(root->_page, 1)->_off = nxt;
         
         // insert stopper key on newroot page
@@ -433,10 +433,10 @@ namespace mongo {
         ((uchar *)root->_page)[nxt] = 2;
         ((uchar *)root->_page)[nxt+1] = 0xff;
         ((uchar *)root->_page)[nxt+2] = 0xff;
-        Page::putid( Page::slotptr(root->_page, 2)->_id, pageId2 );
+        Page::putPageNo( Page::slotptr(root->_page, 2)->_id, pageNo2 );
         Page::slotptr(root->_page, 2)->_off = nxt;
     
-        Page::putid( root->_page->_right, 0 );
+        Page::putPageNo( root->_page->_right, 0 );
         root->_page->_min = nxt;        // reset lowest used offset and key count
         root->_page->_cnt = 2;
         root->_page->_act = 2;
@@ -497,12 +497,12 @@ namespace mongo {
         _frame->_level = level;
     
         // link right node
-        if (set->_pageId > ROOT_page) {
+        if (set->_pageNo > ROOT_page) {
             memcpy( _frame->_right, set->_page->_right, IdLength );
         }
     
         // get new free page and write higher keys to it.
-        if (!(right->_pageId = _mgr->newPage( _frame, _thread ))) {
+        if (!(right->_pageNo = _mgr->newPage( _frame, _thread ))) {
             return _err;
         }
     
@@ -532,28 +532,28 @@ namespace mongo {
     
         // remember fence key for smaller page
         memcpy( fenceKey, key, key->_len + 1 );
-        Page::putid(set->_page->_right, right->_pageId);
+        Page::putPageNo(set->_page->_right, right->_pageNo);
         set->_page->_min = nxt;
         set->_page->_cnt = idx;
     
         // if current page is the root page, split it
-        if (set->_pageId == ROOT_page) {
-            return splitRoot( set, fenceKey, right->_pageId );
+        if (set->_pageNo == ROOT_page) {
+            return splitRoot( set, fenceKey, right->_pageNo );
         }
     
         // insert new fences in their parent pages
-        right->_latch = _mgr->getLatchMgr()->pinLatch( right->_pageId, _thread );
+        right->_latch = _mgr->getLatchMgr()->pinLatch( right->_pageNo, _thread );
         _mgr->lockPage( LockParent, right->_latch, _thread );
         _mgr->lockPage( LockParent, set->_latch, _thread );
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // insert new fence for reformulated left block of smaller keys
-        if (insertKey( fenceKey+1, *fenceKey, level+1, set->_pageId, time(NULL))) {
+        if (insertKey( fenceKey+1, *fenceKey, level+1, set->_pageNo, time(NULL))) {
             return _err;
         }
     
         // switch fence for right block of larger keys to new right page
-        if (insertKey( rightKey+1, *rightKey, level+1, right->_pageId, time(NULL))) {
+        if (insertKey( rightKey+1, *rightKey, level+1, right->_pageNo, time(NULL))) {
             return _err;
         }
     
@@ -573,7 +573,7 @@ namespace mongo {
     BLTERR BLTIndex::insertKey( const uchar* inputKey,
                                 uint inputKeyLen,
                                 uint level,
-                                PageId id,
+                                PageNo id,
                                 uint tod )
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
@@ -585,11 +585,12 @@ namespace mongo {
         BLTKey* key;
     
         while (true) {
+            // find the page (returned in 'set') and slot within page for this key
             slot = _mgr->loadPage( set, inputKey, inputKeyLen, level, LockWrite, _thread );
 
             if (INSERT_TRACE) {
-                __OSS__( "slot = " << slot );
-                Logger::logInfo( _thread, __ss__, __LOC__ );
+                __OSS__( "(pageNo,slot) = (" << set->_pageNo << ',' << slot << ')' );
+                Logger::logDebug( _thread, __ss__, __LOC__ );
             }
 
             if (slot) {
@@ -604,7 +605,7 @@ namespace mongo {
     
             if (INSERT_TRACE) {
                 __OSS__( "key = " << key->toString() );
-                Logger::logInfo( _thread, __ss__, __LOC__ );
+                Logger::logDebug( _thread, __ss__, __LOC__ );
             }
 
             // if key already exists, update id and return
@@ -618,7 +619,7 @@ namespace mongo {
                 if (Page::slotptr(set->_page, slot)->_dead) set->_page->_act++;
                 Page::slotptr(set->_page, slot)->_dead = 0;
                 Page::slotptr(set->_page, slot)->_tod = tod;
-                Page::putid(Page::slotptr(set->_page,slot)->_id, id);
+                Page::putPageNo(Page::slotptr(set->_page,slot)->_id, id);
                 _mgr->unlockPage( LockWrite, set->_latch, _thread );
                 _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
                 _mgr->unpinPool( set->_pool, _thread );
@@ -630,31 +631,43 @@ namespace mongo {
             if (splitPage( set )) return _err;
         }
     
-        // calculate next available slot and copy key into page
-        set->_page->_min -= inputKeyLen + 1; // reset lowest used offset
-        ((uchar *)set->_page)[set->_page->_min] = inputKeyLen;
-        memcpy( (uchar *)set->_page + set->_page->_min +1, inputKey, inputKeyLen );
+        // calculate next available slot and copy key into page: we backup by
+        // inputKeyLen + 1, write one byte of length and inputKeyLen bytes of key.
+        // The key storage grows downward in the page, the slot storage upward.
+        // page format:
+        //                                           ___ page->_min
+        //                                          v
+        //    [ slot|slot|..|slot| ...free-space... |len,key|..|len,key|len,key]
+        //
+        set->_page->_min -= inputKeyLen + 1;    // reset lowest used offset
+        ((uchar *)set->_page)[set->_page->_min] = inputKeyLen;  // 256 byte max length
+        memcpy( (uchar *)set->_page + set->_page->_min + 1, inputKey, inputKeyLen );
     
+        // check for an empty slot
         uint idx;
         for (idx = slot; idx < set->_page->_cnt; idx++) {
           if (Page::slotptr(set->_page, idx)->_dead ) break;
         }
     
-        // now insert key into array before slot
+        // if no emtpy slot: add to end, bump the slot count
         if (idx == set->_page->_cnt ) {
             idx++;
             set->_page->_cnt++;
         }
+
+        // bump the count of active keys
         set->_page->_act++;
     
-        while (idx > slot) {
-            *Page::slotptr(set->_page, idx) = *Page::slotptr(set->_page, idx -1), idx--;
+        // 
+        for (; idx > slot; --idx) {
+            *Page::slotptr(set->_page, idx) = *Page::slotptr(set->_page, idx - 1);
         }
     
-        Page::putid( Page::slotptr(set->_page,slot)->_id, id );
-        Page::slotptr(set->_page, slot)->_off = set->_page->_min;
-        Page::slotptr(set->_page, slot)->_tod = tod;
-        Page::slotptr(set->_page, slot)->_dead = 0;
+        Slot* slotPtr = Page::slotptr(set->_page, slot);
+        Page::putPageNo( slotPtr->_id, id );
+        slotPtr->_off  = set->_page->_min;
+        slotPtr->_tod  = tod;
+        slotPtr->_dead = 0;
     
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
@@ -681,7 +694,7 @@ namespace mongo {
             return 0;
         }
     
-        _cursorPage = set->_pageId;
+        _cursorPage = set->_pageNo;
     
         _mgr->unlockPage( LockRead, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
@@ -699,7 +712,7 @@ namespace mongo {
         PageSet set[1];
     
         do {
-            PageId right = Page::getid(_cursor->_right);
+            PageNo right = Page::getPageNo(_cursor->_right);
     
             while (slot++ < _cursor->_cnt) {
                 if (Page::slotptr(_cursor, slot)->_dead ) {
@@ -738,9 +751,9 @@ namespace mongo {
         return (_err = BLTERR_ok);
     }
     
-    BLTKey* BLTIndex::getKey( uint slot ) { return Page::keyptr(_cursor, slot); }
-    PageId BLTIndex::getPageId( uint slot ) { return Page::getid(Page::slotptr(_cursor,slot)->_id); }
-    uint BLTIndex::getTod( uint slot ) { return Page::slotptr(_cursor,slot)->_tod; } 
+    BLTKey* BLTIndex::getKey( uint slot )   { return Page::keyptr(_cursor, slot); }
+    PageNo BLTIndex::getPageNo( uint slot ) { return Page::getPageNo(Page::slotptr(_cursor,slot)->_id); }
+    uint BLTIndex::getTod( uint slot )      { return Page::slotptr(_cursor,slot)->_tod; } 
 
     /**
     *
@@ -756,28 +769,28 @@ namespace mongo {
         for (ushort idx = 1; idx <= _mgr->getLatchMgr()->_latchDeployed; idx++ ) {
 
             LatchSet* latchSet = &_mgr->getLatchMgr()->_latchSets[ idx ];
-            PageId pageId = latchSet->_pageId;
+            PageNo pageNo = latchSet->_pageNo;
 
             if (*(uint *)latchSet->_readwr ) {
-                __OSS__( "latchset " << idx << " rw locked for page " << pageId );
+                __OSS__( "latchset " << idx << " rw locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_readwr = 0;
     
             if (*(uint *)latchSet->_access ) {
-                __OSS__( "latchset " << idx << " access locked for page " << pageId );
+                __OSS__( "latchset " << idx << " access locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_access = 0;
     
             if (*(uint *)latchSet->_parent ) {
-                __OSS__( "latchset " << idx << " parent locked for page " << pageId );
+                __OSS__( "latchset " << idx << " parent locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
             *(uint *)latchSet->_parent = 0;
     
             if (latchSet->_pin ) {
-                __OSS__( "latchset " << idx << " pinned for page " << pageId );
+                __OSS__( "latchset " << idx << " pinned for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
                 latchSet->_pin = 0;
             }
@@ -795,10 +808,10 @@ namespace mongo {
                 LatchSet* latchSet;
                 do {
                     latchSet = &_mgr->getLatchMgr()->_latchSets[ idx ];
-                    PageId pageId = latchSet->_pageId;
+                    PageNo pageNo = latchSet->_pageNo;
 
                     if (*(uint *)latchSet->_busy ) {
-                        __OSS__( "latchset " << idx << " busy locked for page " << pageId );
+                        __OSS__( "latchset " << idx << " busy locked for page " << pageNo );
                         Logger::logDebug( _thread, __ss__, __LOC__ );
                     }
                     *(uint *)latchSet->_busy = 0;
@@ -807,31 +820,31 @@ namespace mongo {
                         Logger::logDebug( _thread, __ss__, __LOC__ );
                     }
                     if (latchSet->_pin ) {
-                        __OSS__( "latchset " << idx << " pinned for page " << pageId );
+                        __OSS__( "latchset " << idx << " pinned for page " << pageNo );
                         Logger::logDebug( _thread, __ss__, __LOC__ );
                     }
                 } while ((idx = latchSet->_next));
             }
         }
     
-        PageId next = _mgr->getLatchMgr()->_nlatchPage + LATCH_page;
-        PageId pageId = LEAF_page;
-        Page* _frame = (Page *)malloc( _mgr->getPageSize() );
+        PageNo next   = _mgr->getLatchMgr()->_nlatchPage + LATCH_page;
+        PageNo pageNo = LEAF_page;
+        Page* _frame  = (Page *)malloc( _mgr->getPageSize() );
     
-        while (pageId < Page::getid(_mgr->getLatchMgr()->_alloc->_right)) {
-            pread( _mgr->getFD(), _frame, _mgr->getPageSize(), pageId << _mgr->getPageBits() );
+        while (pageNo < Page::getPageNo(_mgr->getLatchMgr()->_alloc->_right)) {
+            pread( _mgr->getFD(), _frame, _mgr->getPageSize(), pageNo << _mgr->getPageBits() );
             if (!_frame->_free) {
                 for (uint idx = 0; idx++ < _frame->_cnt - 1; ) {
                     BLTKey* key = Page::keyptr(_frame, idx+1);
                     if (BLTKey::keycmp( Page::keyptr(_frame, idx), key->_key, key->_len ) >= 0) {
-                        __OSS__( "page " << pageId << " idx" << idx << " out of order" );
+                        __OSS__( "page " << pageNo << " idx" << idx << " out of order" );
                         Logger::logDebug( _thread, __ss__, __LOC__ );
                     }
                 }
             }
     
-            if (pageId > LEAF_page) next = pageId + 1;
-            pageId = next;
+            if (pageNo > LEAF_page) next = pageNo + 1;
+            pageNo = next;
         }
     }
 

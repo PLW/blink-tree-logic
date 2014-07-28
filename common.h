@@ -33,7 +33,7 @@
 
 namespace mongo {
 
-    typedef uint64_t        PageId;
+    typedef uint64_t        PageNo;
     typedef unsigned char   uchar;
     typedef uint16_t        ushort;
     typedef uint32_t        uint;
@@ -42,24 +42,27 @@ namespace mongo {
     #define __LOC__         __FILE__,__FUNCTION__,__LINE__
     #define __OSS__(X)      std::ostringstream __oss__; __oss__ << X; std::string __ss__ = __oss__.str();
 
-    // packed PageId size
-    #define IdLength        6
-
-    // page size parameters
-    #define BLT_minbits     9                   // minimum page size in bits = lg(4K)
-    #define BLT_maxbits     24                  // maximum page size in bits = lg(32K)
-    #define BLT_minpage     (1<<BLT_minbits)    // minimum page size = 4K
-    #define BLT_maxpage     (1<<BLT_maxbits)    // maximum page size = 32K
-    #define BLT_latchtable  128                 // number of latch manager slots
-
-    // file open modes
-    #define BLT_ro 0x6f72                       // read-only
-    #define BLT_rw 0x7772                       // read-write
-    #define BLT_fl 0x6c66                       // file-lock
-   
     // allow big files on 32-bit linux
     #define _LARGEFILE64_SOURCE 
 
+    // default mmap alignment
+    #define MMAP_MIN_SIZE   4096
+
+    // packed DocId size
+    #define IdLength        6                   // packed page id size
+
+    // page size parameters
+    #define BLT_minbits     9                   // minimum page size in bits = lg(512)
+    #define BLT_maxbits     24                  // maximum page size in bits = lg(16M)
+    #define BLT_minpage     (1<<BLT_minbits)    // minimum page size = 512
+    #define BLT_maxpage     (1<<BLT_maxbits)    // maximum page size = 16MB
+    #define BLT_latchtable  128                 // number of latch manager slots
+
+    // file open modes
+    #define BLT_ro          0x6f72              // read-only
+    #define BLT_rw          0x7772              // read-write
+    #define BLT_fl          0x6c66              // file-lock
+   
     // depth min/max bounds
     #define MIN_level       2
     #define MAX_level       15
@@ -78,7 +81,7 @@ namespace mongo {
     #define LVL_shift       11
 
     // bit in pool->_pin
-    #define CLOCK_bit 0x8000    
+    #define CLOCK_bit       0x8000    
 
 }   // namespace mongo
 

@@ -56,6 +56,8 @@ namespace mongo {
         uint32_t _dead:1;           // set for deleted key
         uint32_t _tod;              // time-stamp for key
         uchar    _id[IdLength];     // id associated with key
+
+        friend std::ostream& operator<<( std::ostream& os, const Slot& slot );
     };
     
     /**
@@ -65,14 +67,14 @@ namespace mongo {
     class Page {
     public:
         /**
-        *  Pack PageId into dest array.
+        *  Pack PageNo into dest array.
         */
-        static void putid( uchar* dest, PageId );
+        static void putPageNo( uchar* dest, PageNo );
 
         /**
-        *  Unpack dest array, return PageId
+        *  Unpack dest array, return PageNo
         */
-        static PageId getid( uchar* src );
+        static PageNo getPageNo( uchar* src );
 
         // page slot accessors
         static Slot* slotptr( Page* page, uint slot ) {
@@ -101,7 +103,7 @@ namespace mongo {
     *  loadpage interface object
     */
     struct PageSet {
-        PageId    _pageId;          // current page number
+        PageNo    _pageNo;          // current page number
         Page*     _page;            // current page pointer
         Pool*     _pool;            // current page pool
         LatchSet* _latch;           // current page latch set

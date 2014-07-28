@@ -71,7 +71,6 @@ typedef struct {
     char _idx;
     const char* _infile;
     BufferMgr* _mgr;
-    int _num;
     const char* _thread;
 } ThreadArg;
 
@@ -117,13 +116,6 @@ void* indexOp( void* rawArg ) {
                 if (ch == '\n') {
                     docid++;
 
-                    if (args->_num == 1) {
-                        sprintf((char *)key+len, "%.9d", 1000000000 - docid), len += 9;
-                    }
-                    else if (args->_num) {
-                        sprintf((char *)key+len, "%.9d", docid + args->_idx * args->_num), len += 9;
-                    }
-
                     if (blt->insertKey( key, len, 0, docid, *tod )) {
                         cout << __TRACE__ << "Error " << blt->getLastError() << ", docid " << docid << endl;
                         exit(0);
@@ -156,13 +148,6 @@ void* indexOp( void* rawArg ) {
             while (ch = getc(in), ch != EOF) {
                 if (ch == '\n') {
                     line++;
-                    if (args->_num == 1) {
-                        sprintf((char *)key+len, "%.9d", 1000000000 - line), len += 9;
-                    }
-                    else if (args->_num) {
-                        sprintf((char *)key+len, "%.9d", line + args->_idx * args->_num), len += 9;
-                    }
-
                     if (blt->deleteKey( key, len, 0)) {
                         cout << __TRACE__ << "Error " << blt->getLastError() << ", Line " << line << endl;
                         exit(0);
@@ -198,15 +183,6 @@ void* indexOp( void* rawArg ) {
             while (ch = getc(in), ch != EOF) {
                 if (ch == '\n') {
                     ++line;
-                    if (args->_num == 1) {
-                        sprintf( (char *)key+len, "%.9d", 1000000000 - line);
-                        len += 9;
-                    }
-                    else if (args->_num) {
-                        sprintf( (char *)key+len, "%.9d", line + args->_idx * args->_num);
-                        len += 9;
-                    }
-
                     if (blt->findKey( key, len )) {
                         ++found;
                     }
@@ -231,25 +207,30 @@ void* indexOp( void* rawArg ) {
         Logger::logInfo( thread, "\n[[ scanning ]]", __LOC__ );
 
         uint cnt = 0;
-        PageId pageId = LEAF_page;
-        PageId next;
+        PageNo pageNo = LEAF_page;
+        PageNo next;
 
         do {
-            if ((set->_pool = mgr->pinPool( pageId, thread ))) {
-                set->_page = mgr->page( set->_pool, pageId, thread );
+            if ((set->_pool = mgr->pinPool( pageNo, thread ))) {
+                set->_page = mgr->page( set->_pool, pageNo, thread );
             }
             else {
                 break;
             }
-            set->_latch = mgr->getLatchMgr()->pinLatch( pageId, thread );
-            mgr->lockPage( LockRead, set->_latch, thread );
-            next = Page::getid( set->_page->_right );
-            cnt += set->_page->_act;
 
-            for (int slot = 0; slot++ < set->_page->_cnt;) {
-                if (next || slot < set->_page->_cnt) {
-                    if (!Page::slotptr(set->_page, slot)->_dead) {
-                        BLTKey* key = Page::keyptr(set->_page, slot);
+            Page* page = set->_page;
+
+            set->_latch = mgr->getLatchMgr()->pinLatch( pageNo, thread );
+            mgr->lockPage( LockRead, set->_latch, thread );
+            next = Page::getPageNo( page->_right );
+            cnt += page->_act;
+
+            cout << "\npage id : " << pageNo << " -> " << next << '\n' << *(page) << endl;
+
+            for (int slot = 0; slot++ < page->_cnt;) {
+                if (next || slot < page->_cnt) {
+                    if (!Page::slotptr(page, slot)->_dead) {
+                        BLTKey* key = Page::keyptr(page, slot);
                         cout.write( (const char*)key->_key, key->_len ) << endl;
                     }
                 }
@@ -258,9 +239,9 @@ void* indexOp( void* rawArg ) {
             mgr->unlockPage( LockRead, set->_latch, thread );
             mgr->getLatchMgr()->unpinLatch( set->_latch, thread );
             mgr->unpinPool( set->_pool, thread );
-        } while ((pageId = next));
+        } while ((pageNo = next));
 
-        --cnt;    // remove stopper key
+        --cnt;    // don't count stop/sentinel key
 
         {
             __OSS__( " Total keys read " << cnt );
@@ -272,15 +253,15 @@ void* indexOp( void* rawArg ) {
     case 'c': {
         Logger::logInfo( thread, "\n[[ counting ]]", __LOC__ );
         uint cnt = 0;
-        PageId pageId = LEAF_page;
-        PageId next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
+        PageNo pageNo = LEAF_page;
+        PageNo next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
 
-        while (pageId < Page::getid(mgr->getLatchMgr()->_alloc->_right)) {
-            PageId off = pageId << mgr->getPageBits();
+        while (pageNo < Page::getPageNo(mgr->getLatchMgr()->_alloc->_right)) {
+            PageNo off = pageNo << mgr->getPageBits();
             pread( mgr->getFD(), blt->getFrame(), mgr->getPageSize(), off );
             if (!blt->getFrame()->_free && !blt->getFrame()->_level) cnt += blt->getFrame()->_act;
-            if (pageId > LEAF_page) next = pageId + 1;
-            pageId = next;
+            if (pageNo > LEAF_page) next = pageNo + 1;
+            pageNo = next;
         }
         
         cnt--;    // remove stopper key
@@ -305,35 +286,33 @@ typedef struct timeval timer;
 void usage( const char* arg0 ) {
     cout << "Usage: " << arg0  << "OPTIONS\n"
             "  -f dbname      - the name of the index file(s)\n"
-            "  -c cmd         - one of: audit, write, delete, find, scan, count\n"
-            "  -p PageBits    - page size in bits\n"
-            "  -n PoolSize    - number of buffer pool mmapped page segments\n"
-            "  -s SegBits     - segment size in pages in bits\n"
-            "  -l             - append line numbers to keys\n"
+            "  -c cmd         - one of: Audit, Write, Delete, Find, Scan, Count\n"
+            "  -p PageBits    - page size in bits; default 16\n"
+            "  -n PoolSize    - number of buffer pool mmapped page segments; default 8192\n"
+            "  -s SegBits     - segment size in pages in bits; default 5\n"
             "  -k k_1,k_2,..  - list of source key files k_i, one per thread" << endl;
 }
 
 int main(int argc, char* argv[] ) {
 
     string dbname;          // index file name
-    string cmd;             // command = { audit|write|delete|find|scan|count }
+    string cmd;             // command = { Audit|Write|Delete|Find|Scan|Count }
     uint pageBits = 16;     // (i.e.) 32KB per page
     uint poolSize = 8192;   // (i.e.) 8192 segments
     uint segBits = 5;       // (i.e.) 32 pages per segment
-    bool num = false;       // (i.e.) do not append line numbers
 
     vector<string> srcv;    // source files containing keys
     vector<string> cmdv;    // corresponding commands
 
     opterr = 0;
     char c;
-    while ((c = getopt( argc, argv, "f:c:p:n:s:k:l" )) != -1) {
+    while ((c = getopt( argc, argv, "f:c:p:n:s:k:" )) != -1) {
         switch (c) {
         case 'f': { // -f dbName
             dbname = optarg;
             break;
         }
-        case 'c': { // -c (read|write|scan|delete|find)[,..]
+        case 'c': { // -c (Read|Write|Scan|Delete|Find)[,..]
             //cmd = optarg;
             char sep[] = ",";
             char* tok = strtok( optarg, sep );
@@ -366,10 +345,6 @@ int main(int argc, char* argv[] ) {
             }
             break;
         }
-        case 'l': { // -l 
-            num = true;
-            break;
-        }
         case '?': {
             usage( argv[0] );
             return 1;
@@ -388,7 +363,6 @@ int main(int argc, char* argv[] ) {
     cout << __TRACE__ << "pageBits = " << pageBits << endl;
     cout << __TRACE__ << "poolSize = " << poolSize << endl;
     cout << __TRACE__ << "segBits = " << segBits << endl;
-    cout << __TRACE__ << "num = " << num << endl;
     cout << __TRACE__ << "cmd count = " << cmdv.size() << endl;
     cout << __TRACE__ << "src count = " << srcv.size() << endl;
 
@@ -432,7 +406,6 @@ int main(int argc, char* argv[] ) {
 
     // allocate buffer pool manager
     BufferMgr* mgr = BufferMgr::create( dbname.c_str(), // index file name
-                                        BLT_rw,         // open mode
                                         pageBits,       // page size in bits
                                         poolSize,       // number of segments
                                         segBits,        // segment size in pages in bits
@@ -450,7 +423,6 @@ int main(int argc, char* argv[] ) {
         args[i]._infile = srcv[i].c_str();
         args[i]._type = cmdv[i][0];   // (i.e.) A/W/D/F/S/C
         args[i]._mgr = mgr;
-        args[i]._num = num;
         args[i]._idx = i;
         args[i]._thread = threadNames[ i+1 ];
         int err = pthread_create( &threads[i], NULL, indexOp, &args[i] );
