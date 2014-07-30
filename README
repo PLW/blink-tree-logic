@@ -2,6 +2,7 @@
 # the University of California, Berkeley.  The code is derived and re-written
 # from original 'C' source code placed in the public domain by Karl Malbrain.
 # See: http://arxiv.org/ftp/arxiv/papers/1009/1009.2764.pdf
+# See: https://code.google.com/p/high-concurrency-btree/
 
 # compile everything
 g++ -O3 -o random_keys random_keys.cpp
@@ -39,7 +40,7 @@ g++ -O3 -o bltindex logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp b
 #
 # (e.g.) 32KB pages, 8192 segments of 32 pages each = 8GB total storage
 
-#rm -f testdb
-#./bltindex -f testdb -c Write -k keys.txt -p 15 -n 8192 -s 5
-#./bltindex -f testdb -c Scan,Find,Find -k keys.txt,keys.txt,keys.txt -p 15 -n 8192 -s 5
+rm -f testdb
+./bltindex -f testdb -c Write -k keys.txt -p 15 -n 8192 -s 5
+./bltindex -f testdb -c Scan,Find,Find -k keys.txt,keys.txt,keys.txt -p 15 -n 8192 -s 5
 
