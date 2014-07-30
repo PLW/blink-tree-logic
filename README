@@ -1,6 +1,6 @@
-# The B-LInk tree code is based on research published by Kark Malbrain of
-# the University of California, Berkeley.  The code is derived and re-written
-# from original 'C' source code placed in the public domain by Karl Malbrain.
+# The B-LInk tree code is based on research published by Kark Malbrain.
+# The code is derived and re-written from original 'C' source code placed
+# in the public domain by Karl Malbrain.
 # See: http://arxiv.org/ftp/arxiv/papers/1009/1009.2764.pdf
 # See: https://code.google.com/p/high-concurrency-btree/
 
