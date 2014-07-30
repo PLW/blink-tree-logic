@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #pragma once
 
 #include "common.h"
@@ -75,6 +92,16 @@ namespace mongo {
         *  Unpack dest array, return PageNo
         */
         static PageNo getPageNo( uchar* src );
+
+        /**
+        *  Pack DocId into dest array.
+        */
+        static void putDocId( uchar* dest, DocId );
+
+        /**
+        *  Unpack dest array, return DocId
+        */
+        static DocId getDocId( uchar* src );
 
         // page slot accessors
         static Slot* slotptr( Page* page, uint slot ) {

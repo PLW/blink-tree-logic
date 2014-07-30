@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #include "common.h"
 #include "blterr.h"
 #include "bltkey.h"
@@ -533,8 +550,12 @@ namespace mongo {
 
     #define LOADPAGE_TRACE  false
 
-    int BufferMgr::loadPage( PageSet* set, const uchar* key, uint keylen,
-                             uint level, LockMode inputMode, const char* thread )
+    int BufferMgr::loadPage( PageSet* set,
+                             const uchar* key,
+                             uint keylen,
+                             uint level,
+                             LockMode inputMode,
+                             const char* thread )
     {
         if (BUFFER_MGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
     
@@ -544,14 +565,14 @@ namespace mongo {
         // start at root of btree and drill down
         PageNo pageNo     = ROOT_page;
         PageNo prevPageNo = 0;
-        uint drill        = 0xff;
+        uint drill        = 0xff;   // current drill-down level, leaf level = 0
 
         LockMode prevMode;
         LatchSet* prevLatch;
         Pool* prevPool;
 
         do {
-            // determine lock mode of drill level
+            // determine lock mode of drill level: LockRead until we find our level
             LockMode lockMode = (drill == level) ? inputMode : LockRead; 
 
             set->_latch = _latchMgr->pinLatch( pageNo, thread );

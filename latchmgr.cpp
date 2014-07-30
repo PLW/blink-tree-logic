@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #include "common.h"
 #include "latchmgr.h"
 #include "blterr.h"
@@ -41,7 +58,7 @@ namespace mongo {
 
     // SpinLatch
 
-    #define READLOCK_TRACE  false
+    #define LATCH_TRACE     false
 
     /**
     *  wait until write lock mode is clear,
@@ -58,16 +75,8 @@ namespace mongo {
         do {
             // obtain latch mutex
             if (__sync_lock_test_and_set(latch->_mutex, 1)) {
-                Logger::logMsg( thread, "0" );
+                if (LATCH_TRACE) Logger::logMsg( thread, "0" );
                 continue;
-            }
-
-            if (READLOCK_TRACE) {
-                __OSS__( "mutex[0] = " << (bool)latch->_mutex[0]
-	                        << ", share = " << latch->_share
-	                        << ", exclusive = " << (bool)latch->_exclusive
-	                        << ", pending = " << (bool)latch->_pending );
-               Logger::logDebug( thread, __ss__, __LOC__ );
             }
 
             // see if exclusive request is granted or pending
@@ -81,8 +90,6 @@ namespace mongo {
         } while (sched_yield(), 1);
     }
  
-    #define WRITELOCK_TRACE false
-
     /**
     *  wait for other read and write latches to relinquish
     */
@@ -94,16 +101,8 @@ namespace mongo {
         uint prev;
         do {
             if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-                Logger::logMsg( thread, "1" );
+                if (LATCH_TRACE) Logger::logMsg( thread, "1" );
                 continue;
-            }
-
-            if (WRITELOCK_TRACE) {
-                __OSS__( "mutex[0] = " << (bool)latch->_mutex[0]
-	                        << ", share = "     << latch->_share
-	                        << ", exclusive = " << (bool)latch->_exclusive
-	                        << ", pending = "   << (bool)latch->_pending );
-                Logger::logDebug( thread, __ss__, __LOC__ );
             }
 
             // see if shared or exclusive request is granted 
@@ -116,7 +115,7 @@ namespace mongo {
             }
             *latch->_mutex = 0;
             if (prev) return;
-        } while( sched_yield(), 1 );
+        } while (sched_yield(), 1);
     }
  
     /**
@@ -129,7 +128,7 @@ namespace mongo {
         assert( NULL != latch );
 
         if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-            Logger::logMsg( thread, "2" );
+            if (LATCH_TRACE) Logger::logMsg( thread, "2" );
             return 0;
         }
 
@@ -152,7 +151,7 @@ namespace mongo {
         assert( NULL != latch );
 
         while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            Logger::logMsg( thread, "4" );
+            if (LATCH_TRACE) Logger::logMsg( thread, "4" );
             sched_yield();
         }
         latch->_exclusive = 0;
@@ -168,7 +167,7 @@ namespace mongo {
         assert( NULL != latch );
 
         while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            Logger::logMsg( thread, "5" );
+            if (LATCH_TRACE) Logger::logMsg( thread, "5" );
             sched_yield();
         }
         --latch->_share;
@@ -183,15 +182,6 @@ namespace mongo {
             << ", pending: = " << (bool)_pending
             << ", share = " << _share << "]";
         return oss.str();
-    }
-
-    std::ostream& operator<<( std::ostream& os, const SpinLatch& latch ) {
-        return os <<
-            "SpinLatch["
-            " mutex = " << (bool)latch._mutex[0] <<
-            ", exclusive = " << (bool)latch._exclusive <<
-            ", pending: = " << (bool)latch._pending <<
-            ", share = " << latch._share << "]";
     }
 
     std::string LatchSet::toString() const {
@@ -209,25 +199,18 @@ namespace mongo {
         return oss.str();
     }
  
+    std::ostream& operator<<( std::ostream& os, const SpinLatch& latch ) {
+        return os << latch.toString();
+    }
+
     std::ostream& operator<<( std::ostream& os, const LatchSet& set ) {
-        return os <<
-            "LatchSet["
-            "\n  access = " << set._access[0] <<
-            "\n  readwr = " << set._readwr[0] <<
-            "\n  parent = " << set._parent[0] <<
-            "\n  busy = "   << set._busy[0] <<
-            "\n  next = "   << set._next <<
-            "\n  prev = "    << set._prev <<
-            "\n  pin = "    << set._pin <<
-            "\n  hash = "   << set._hash <<
-            "\n  pageNo = " << set._pageNo << "]";
+        return os << set.toString();
     }
  
-
     // LatchMgr
 
     /**
-    *
+    *  Add victim to head of hash chain at hashIndex
     */
     void LatchMgr::latchLink( ushort hashIndex, ushort victim, PageNo pageNo, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
@@ -244,7 +227,7 @@ namespace mongo {
     }
     
     /**
-    *
+    *  Unpin, i.e. decrement lock count
     */
     void LatchMgr::unpinLatch( LatchSet* set, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
@@ -252,11 +235,9 @@ namespace mongo {
         __sync_fetch_and_add( &set->_pin, -1 );
     }
 
-    #define PINLATCH_TRACE  false
-
     /**
-    *  find existing latchset or inspire new one
-    *  @return with latchset pinned
+    *  find existing latch set or create a new one
+    *  @return with latchset pinned (i.e.) lock count++
     */
     LatchSet* LatchMgr::pinLatch( PageNo pageNo, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
@@ -269,48 +250,52 @@ namespace mongo {
         // obtain read lock on hash table entry
         SpinLatch::spinReadLock( _table[ hashIndex ]._latch, thread );
     
-        if ( (slot = _table[ hashIndex ]._slot) ){
+        // check if non-empty slot and follow chain from there
+        if ( (slot = _table[ hashIndex ]._slot) ) {
             do {
                 set = &_latchSets[ slot ];
                 if (pageNo == set->_pageNo) break;
             } while ( (slot = set->_next) );
         }
     
+        // if found, increment in count 
         if (slot) {
-            __sync_fetch_and_add( &set->_pin, 1 );
+            __sync_fetch_and_add( &set->_pin, 1 );  // i.e. lock count++
         }
     
+        // release hash table entry
         SpinLatch::spinReleaseRead( _table[ hashIndex ]._latch, thread );
     
+        // if found, then done
         if (slot) return set;
     
-        // try again, this time with write lock
+        // not found: try again with write lock, we are going to create new latch set
         SpinLatch::spinWriteLock( _table[ hashIndex ]._latch, thread );
     
         if ( (slot = _table[ hashIndex ]._slot) ) {
             do {
                 set = &_latchSets[ slot ];
-                if (pageNo == set->_pageNo) break;
-                if (!set->_pin && !avail) avail = slot;
+                if (pageNo == set->_pageNo) break;      // might have shown up since we last checked
+                if (!set->_pin && !avail) avail = slot; // may reuse unpinned slot
             } while( (slot = set->_next) );
         }
     
         // found our entry, or take over an unpinned one
         if (slot || (slot = avail)) {
             set = &_latchSets[ slot ];
-            __sync_fetch_and_add( &set->_pin, 1 );
+            __sync_fetch_and_add( &set->_pin, 1 );  // i.e. lock count++
             set->_pageNo = pageNo;
-            SpinLatch::spinReleaseRead( _table[ hashIndex ]._latch, thread );
+            SpinLatch::spinReleaseRead( _table[ hashIndex ]._latch, thread );   // releaseWrite??
             return set;
         }
     
-        // see if there are any unused entries
+        // not found and no unpinned entries: see if there are any unused entries
         ushort victim = __sync_fetch_and_add( &_latchDeployed, 1 ) + 1;
     
-        if (victim < _latchTotal) {
+        if (victim < _latchTotal) { // i.e. an available slot
             set = &_latchSets[ victim ];
-            __sync_fetch_and_add( &set->_pin, 1 );
-            latchLink( hashIndex, victim, pageNo, thread );
+            __sync_fetch_and_add( &set->_pin, 1 );              // i.e. lock count++
+            latchLink( hashIndex, victim, pageNo, thread );     // link onto hash chain
             SpinLatch::spinReleaseWrite( _table[ hashIndex ]._latch, thread );
             return set;
         }
@@ -319,7 +304,7 @@ namespace mongo {
 
         // find and reuse previous lock entry
         while (true) {
-            victim = __sync_fetch_and_add( &_latchVictim, 1 );
+            victim = __sync_fetch_and_add( &_latchVictim, 1 );  // i.e. latchVictim += 1
 
             // we don't use slot zero
             if ( (victim %= _latchTotal) ) {
@@ -329,7 +314,7 @@ namespace mongo {
                 continue;
             }
     
-            // take control of our slot from other threads
+            // try to take control of our slot from other threads
             if (set->_pin || !SpinLatch::spinTryWrite( set->_busy, thread )) continue;
     
             ushort idx = set->_hash;
@@ -341,6 +326,7 @@ namespace mongo {
                 continue;
             }
     
+            // check again: don't use a pinned set
             if (set->_pin) {
                 SpinLatch::spinReleaseWrite( set->_busy, thread );
                 SpinLatch::spinReleaseWrite( _table[idx]._latch, thread );
@@ -354,13 +340,13 @@ namespace mongo {
             else {
                 _table[idx]._slot = set->_next;
             }
-    
             if (set->_next) {
                 _latchSets[set->_next]._prev = set->_prev;
             }
     
+            // release latches and return the pinned latch set
             SpinLatch::spinReleaseWrite( _table[idx]._latch, thread );
-            __sync_fetch_and_add( &set->_pin, 1 );
+            __sync_fetch_and_add( &set->_pin, 1 );      // lock count++
             latchLink( hashIndex, victim, pageNo, thread );
             SpinLatch::spinReleaseWrite( _table[ hashIndex ]._latch, thread );
             SpinLatch::spinReleaseWrite( set->_busy, thread );

@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #pragma once
 
 #include "page.h"
@@ -90,9 +107,9 @@ namespace mongo {
 
     public:
 	    volatile uchar _mutex[1];
-	    volatile uchar _exclusive:1;         // set for write access
+	    volatile uchar _exclusive:1;     // set for write access
 	    volatile uchar _pending:1;
-	    volatile uint16_t _share;            // count of read accessors
+	    volatile uint16_t _share;        // count of read accessors
 	};
 	
 	struct HashEntry {
@@ -108,7 +125,7 @@ namespace mongo {
 	    volatile uint16_t _next;    // next entry in hash table chain
 	    volatile uint16_t _prev;    // prev entry in hash table chain
 	    volatile uint16_t _pin;     // number of outstanding locks
-	    volatile uint16_t _hash;    // hash slot entry is under
+	    volatile uint16_t _hash;    // hash slot of this entry
 	    volatile PageNo _pageNo;    // latch set page number
 
         friend std::ostream& operator<<( std::ostream& os, const LatchSet& set );
@@ -119,8 +136,12 @@ namespace mongo {
     public:
         /**
         *  link latch table entry into latch hash table
+        *  @param hashIndex - latch hash table index -> slot
+        *  @param victim    - latchSets index of latch being added
+        *  @param pageNo    - 
+        *  @param thread    - 
         */
-        void latchLink( ushort hashidx, ushort victim, PageNo pageNo, const char* thread );
+        void latchLink( ushort hashIndex, ushort victim, PageNo pageNo, const char* thread );
 
         /**
         *  release latch pin

@@ -53,6 +53,7 @@ namespace mongo {
     }
 
     void Logger::logMsg( const std::string& label, const char* msg ) {
+        if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
         *(it->second) << msg;
@@ -66,6 +67,7 @@ namespace mongo {
 
     void Logger::logInfo( const std::string& label, const char* msg,
                             const char* file, const char* func, uint32_t line ) {
+        if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
         *(it->second) << "Info [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
@@ -78,6 +80,7 @@ namespace mongo {
 
     void Logger::logDebug( const std::string& label, const char* msg,
                             const char* file, const char* func, uint32_t line ) {
+        if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
         *(it->second) << "Debug [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
@@ -90,6 +93,7 @@ namespace mongo {
 
     void Logger::logError( const std::string& label, const char* msg,
                             const char* file, const char* func, uint32_t line ) {
+        if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
         *(it->second) << "Error [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;

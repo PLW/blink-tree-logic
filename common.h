@@ -34,6 +34,7 @@
 namespace mongo {
 
     typedef uint64_t        PageNo;
+    typedef uint64_t        DocId;
     typedef unsigned char   uchar;
     typedef uint16_t        ushort;
     typedef uint32_t        uint;
@@ -48,8 +49,11 @@ namespace mongo {
     // default mmap alignment
     #define MMAP_MIN_SIZE   4096
 
+    // packed PageNo size
+    #define IdLength        6                   // packed page number size
+
     // packed DocId size
-    #define IdLength        6                   // packed page id size
+    #define DocIdLength     6                   // packed docid size
 
     // page size parameters
     #define BLT_minbits     9                   // minimum page size in bits = lg(512)

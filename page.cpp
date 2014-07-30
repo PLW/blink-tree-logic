@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #include "page.h"
 #include "blterr.h"
 
@@ -65,7 +82,7 @@ namespace mongo {
     */
 
     /**
-    *  Move Id bytes into a dest array.
+    *  Move PageNo into a dest array.
     */
     void Page::putPageNo( uchar* dest, PageNo pageNo ) {
         int i = IdLength;
@@ -76,7 +93,7 @@ namespace mongo {
     }
     
     /**
-    *  Extract Id bytes from a src array.
+    *  Extract PageNofrom byte array
     */
     PageNo Page::getPageNo( uchar* src ) {
         PageNo pageNo = 0;
@@ -85,6 +102,29 @@ namespace mongo {
             pageNo |= *src++; 
         }
         return pageNo;
+    }
+    
+    /**
+    *  Move DocId into byte array
+    */
+    void Page::putDocId( uchar* dest, DocId docId ) {
+        int i = DocIdLength;
+        while (i--) {
+            dest[i] = (uchar)docId;
+            docId >>= 8;
+        }
+    }
+    
+    /**
+    *  Extract Id bytes from a src array.
+    */
+    DocId Page::getDocId( uchar* src ) {
+        DocId docId = 0;
+        for (int i = 0; i < DocIdLength; ++i) {
+            docId <<= 8;
+            docId |= *src++; 
+        }
+        return docId;
     }
     
     // debugging output

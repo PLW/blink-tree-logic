@@ -27,6 +27,23 @@
 *    it in the license file.
 */
 
+/*
+*  This module contains derived code.   The original
+*  copyright notice is as follows:
+*
+*    This work, including the source code, documentation
+*    and related data, is placed into the public domain.
+*  
+*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
+*  
+*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+*    RESULTING FROM THE USE, MODIFICATION, OR
+*    REDISTRIBUTION OF THIS SOFTWARE.
+*/
+
 #include "bltindex.h"
 #include "common.h"
 #include "latchmgr.h"
@@ -306,13 +323,13 @@ namespace mongo {
     /**
     *  find key in leaf level and return pageNo
     */
-    PageNo BLTIndex::findKey( const uchar* inputKey, uint inputKeyLen ) {
+    DocId BLTIndex::findKey( const uchar* inputKey, uint inputKeyLen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != inputKey );
 
         PageSet set[1];
-        PageNo id = 0;
+        DocId id = 0;
         BLTKey* key;
     
         uint slot = _mgr->loadPage( set, inputKey, inputKeyLen, 0, LockRead, _thread );
@@ -323,10 +340,10 @@ namespace mongo {
             return 0;
         }
     
-        // if key exists, return row-id, otherwise return 0
+        // if key exists, return docid, otherwise return 0
         if (slot <= set->_page->_cnt ) {
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
-                id = Page::getPageNo( Page::slotptr( set->_page, slot )->_id );
+                id = Page::getDocId( Page::slotptr( set->_page, slot )->_id );
             }
         }
     
@@ -588,10 +605,10 @@ namespace mongo {
             // find the page (returned in 'set') and slot within page for this key
             slot = _mgr->loadPage( set, inputKey, inputKeyLen, level, LockWrite, _thread );
 
-            if (INSERT_TRACE) {
+            //if (INSERT_TRACE) {
                 __OSS__( "(pageNo,slot) = (" << set->_pageNo << ',' << slot << ')' );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
-            }
+            //}
 
             if (slot) {
                 key = Page::keyptr(set->_page, slot);
@@ -612,14 +629,15 @@ namespace mongo {
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
 
                 {
-                    __OSS__( "duplicate key: " << key->toString() );
+                    __OSS__( "duplicate key: " << key->toString() << " :: "
+                                << std::string( (const char*)inputKey, inputKeyLen ));
                     Logger::logInfo( _thread, __ss__, __LOC__ );
                 }
 
                 if (Page::slotptr(set->_page, slot)->_dead) set->_page->_act++;
                 Page::slotptr(set->_page, slot)->_dead = 0;
                 Page::slotptr(set->_page, slot)->_tod = tod;
-                Page::putPageNo(Page::slotptr(set->_page,slot)->_id, id);
+                Page::putDocId( Page::slotptr(set->_page,slot)->_id, id );
                 _mgr->unlockPage( LockWrite, set->_latch, _thread );
                 _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
                 _mgr->unpinPool( set->_pool, _thread );
@@ -658,17 +676,23 @@ namespace mongo {
         // bump the count of active keys
         set->_page->_act++;
     
-        // 
+        //
+        // linear insertion algorithm: move all the slot pointers down by one
+        // until we reach either the previous discovered empty slot or the end
+        // of the slot array.
+        //
         for (; idx > slot; --idx) {
             *Page::slotptr(set->_page, idx) = *Page::slotptr(set->_page, idx - 1);
         }
     
+        // insert new key data into vacant slot
         Slot* slotPtr = Page::slotptr(set->_page, slot);
         Page::putPageNo( slotPtr->_id, id );
         slotPtr->_off  = set->_page->_min;
         slotPtr->_tod  = tod;
         slotPtr->_dead = 0;
     
+        // unlock and return
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
         _mgr->unpinPool( set->_pool, _thread );
@@ -712,7 +736,7 @@ namespace mongo {
         PageSet set[1];
     
         do {
-            PageNo right = Page::getPageNo(_cursor->_right);
+            PageNo right = Page::getPageNo( _cursor->_right );
     
             while (slot++ < _cursor->_cnt) {
                 if (Page::slotptr(_cursor, slot)->_dead ) {
@@ -752,7 +776,7 @@ namespace mongo {
     }
     
     BLTKey* BLTIndex::getKey( uint slot )   { return Page::keyptr(_cursor, slot); }
-    PageNo BLTIndex::getPageNo( uint slot ) { return Page::getPageNo(Page::slotptr(_cursor,slot)->_id); }
+    PageNo BLTIndex::getPageNo( uint slot ) { return Page::getPageNo( Page::slotptr(_cursor,slot)->_id ); }
     uint BLTIndex::getTod( uint slot )      { return Page::slotptr(_cursor,slot)->_tod; } 
 
     /**
