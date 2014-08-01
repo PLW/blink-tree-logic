@@ -56,13 +56,13 @@ namespace mongo {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
-        *(it->second) << msg;
+        *(it->second) << label << ':' << msg << std::endl;
     }
 
     void Logger::logMsg( const std::string& label, const std::string& msg ) {
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
-        *(it->second) << msg;
+        *(it->second) << label << ':' << msg << std::endl;
     }
 
     void Logger::logInfo( const std::string& label, const char* msg,
@@ -70,7 +70,7 @@ namespace mongo {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
-        *(it->second) << "Info [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
+        *(it->second) << label << ':' << "Info [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 
     void Logger::logInfo( const std::string& label, const std::string& msg,
@@ -83,7 +83,7 @@ namespace mongo {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
-        *(it->second) << "Debug [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
+        *(it->second) << label << ':' << "Debug [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 
     void Logger::logDebug( const std::string& label, const std::string& msg,
@@ -96,7 +96,7 @@ namespace mongo {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
         assert( it != logv.end() );
-        *(it->second) << "Error [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
+        *(it->second) << label << ':' << "Error [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 
     void Logger::logError( const std::string& label, const std::string& msg,

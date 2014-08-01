@@ -1,4 +1,4 @@
-//@file bltindex_test.cpp
+//@file bltree_test.cpp
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -44,9 +44,9 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
-#include "bltindex.h"
+#include "bltree.h"
 #include "common.h"
-#include "buffer_mgr.h"
+#include "bufmgr.h"
 #include "logger.h"
 
 #include <iostream>
@@ -81,6 +81,29 @@ double getCpuTime( int type ) {
         return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
     } }
     return 0;
+}
+
+void printRUsage() {
+    struct rusage used[1];
+    getrusage( RUSAGE_SELF, used );
+
+    cout
+        << "\nProcess resouce usage:"
+        << "\nmaximum resident set size = " << used->ru_maxrss 
+        << "\nintegral shared memory size = " << used->ru_ixrss
+        << "\nintegral unshared data size = " << used->ru_idrss
+        << "\nintegral unshared stack size = " << used->ru_isrss
+        << "\npage reclaims (soft page faults) = " << used->ru_minflt
+        << "\npage faults (hard page faults) = " << used->ru_majflt
+        << "\nswaps = " << used->ru_nswap
+        << "\nblock input operations = " << used->ru_inblock
+        << "\nblock output operations = " << used->ru_oublock
+        << "\nIPC messages sent = " << used->ru_msgsnd
+        << "\nIPC messages received = " << used->ru_msgrcv
+        << "\nsignals received = " << used->ru_nsignals
+        << "\nvoluntary context switches = " << used->ru_nvcsw
+        << "\ninvoluntary context switches = " << used->ru_nivcsw << endl;
+
 }
 
 typedef struct {
@@ -134,10 +157,16 @@ void* indexOp( void* rawArg ) {
                     docid++;
 
                     if (blt->insertKey( key, len, 0, docid, *tod )) {
-                        cout << __TRACE__ << "Error " << blt->getLastError() << ", docid " << docid << endl;
+                        __OSS__( "Error " << blt->getLastError() << ", docid " << docid );
+                        Logger::logError( thread, __ss__, __LOC__ );
                         exit(0);
                     }
                     len = 0;
+
+                    if (0 == docid % 100000) {
+                        __OSS__( "thread " << thread << " inserted " << docid << " keys" );
+                        Logger::logInfo( "main", __ss__, __LOC__ );
+                    }
                  }
                  else if (len < 255) {
                     key[len++] = ch;
@@ -166,10 +195,11 @@ void* indexOp( void* rawArg ) {
                 if (ch == '\n') {
                     line++;
                     if (blt->deleteKey( key, len, 0)) {
-                        cout << __TRACE__ << "Error " << blt->getLastError() << ", Line " << line << endl;
+                        __OSS__( "Error " << blt->getLastError() << ", Line " << line );
+                        Logger::logError( thread, __ss__, __LOC__ );
                         exit(0);
                     }
-                    (cout << "deleted '").write( (const char*)key, len ) << '\'' << endl;
+                    //(cout << "deleted '").write( (const char*)key, len ) << '\'' << endl;
                     len = 0;
                 }
                 else if (len < 255) {
@@ -204,7 +234,8 @@ void* indexOp( void* rawArg ) {
                         ++found;
                     }
                     else if ( (err = blt->getLastError()) ) {
-                        cout << __TRACE__ << "Error " << err << " Syserr " << strerror(errno) << " Line " << line << endl;
+                        __OSS__( "Error " << err << " Syserr " << strerror(errno) << " Line " << line );
+                        Logger::logError( thread, __ss__, __LOC__ );
                         exit(-1);
                     }
                     len = 0;
@@ -226,6 +257,7 @@ void* indexOp( void* rawArg ) {
         uint cnt = 0;
         PageNo pageNo = LEAF_page;
         PageNo next;
+        char buf[256];
 
         do {
             if ((set->_pool = mgr->pinPool( pageNo, thread ))) {
@@ -242,13 +274,15 @@ void* indexOp( void* rawArg ) {
             next = Page::getPageNo( page->_right );
             cnt += page->_act;
 
-            cout << "\npage id : " << pageNo << " -> " << next << '\n' << *(page) << endl;
+            //cout << "\npage id : " << pageNo << " -> " << next << '\n' << *(page) << endl;
 
             for (int slot = 0; slot++ < page->_cnt;) {
                 if (next || slot < page->_cnt) {
                     if (!Page::slotptr(page, slot)->_dead) {
                         BLTKey* key = Page::keyptr(page, slot);
-                        cout.write( (const char*)key->_key, key->_len ) << endl;
+                        strncpy( buf, (const char*)key->_key, key->_len );
+                        buf[ key->_len ] = 0;
+                        Logger::logInfo( thread, buf, __LOC__ );
                     }
                 }
             }
@@ -375,28 +409,28 @@ int main(int argc, char* argv[] ) {
         poolSize = 65536;
     }
     
-    cout << __TRACE__ << "dbname = " << dbname << endl;
-    cout << __TRACE__ << "cmd = " << cmd << endl;
-    cout << __TRACE__ << "pageBits = " << pageBits << endl;
-    cout << __TRACE__ << "poolSize = " << poolSize << endl;
-    cout << __TRACE__ << "segBits = " << segBits << endl;
-    cout << __TRACE__ << "cmd count = " << cmdv.size() << endl;
-    cout << __TRACE__ << "src count = " << srcv.size() << endl;
+    cout << __TRACE__ << " : dbname = " << dbname << endl;
+    cout << __TRACE__ << " : cmd = " << cmd << endl;
+    cout << __TRACE__ << " : pageBits = " << pageBits << endl;
+    cout << __TRACE__ << " : poolSize = " << poolSize << endl;
+    cout << __TRACE__ << " : segBits = " << segBits << endl;
+    cout << __TRACE__ << " : cmd count = " << cmdv.size() << endl;
+    cout << __TRACE__ << " : src count = " << srcv.size() << endl;
 
     if (cmdv.size() != srcv.size()) {
-        cout << __TRACE__ << "Need one command per source key file (per thread)" << endl;
+        cout << __TRACE__ << " : Need one command per source key file (per thread)" << endl;
         exit(-1);
     }
 
     for (uint i=0; i<srcv.size(); ++i) {
-        cout << __TRACE__ << cmdv[i] << " -> " << srcv[i] << endl;
+        cout << __TRACE__ << " : " << cmdv[i] << " -> " << srcv[i] << endl;
     } 
 
     double start = getCpuTime(0);
     int cnt = srcv.size();
 
     if (cnt > 100) {
-        cout << __TRACE__ << "cmd count exceeds 100.  bailing." << endl;
+        cout << __TRACE__ << " : cmd count exceeds 100.  bailing." << endl;
         exit( -1 );
     }
 
@@ -416,7 +450,8 @@ int main(int argc, char* argv[] ) {
 
     // initialize logger
     vector< pair< string, ostream* > > v;
-    for (uint32_t i=0; i<=cnt; ++i) {
+    v.push_back( pair< string, ostream* >( threadNames[ 0 ], &std::cout ) );
+    for (uint32_t i=1; i<=cnt; ++i) {
         v.push_back( pair< string, ostream* >( threadNames[ i ], new ostringstream() ) );
     }
     Logger::init( v );
@@ -426,15 +461,15 @@ int main(int argc, char* argv[] ) {
                                         pageBits,       // page size in bits
                                         poolSize,       // number of segments
                                         segBits,        // segment size in pages in bits
-                                        poolSize>>3 );  // hashSize
+                                        poolSize>>2 );  // hashSize
 
     if (!mgr) {
-        cout << __TRACE__ << "buffer pool create failed.  bailing." << endl;
+        cout << __TRACE__ << " : buffer pool create failed.  bailing." << endl;
         exit(1);
     }
 
     // start threads
-    cout << __TRACE__ << "starting:" << endl;
+    cout << __TRACE__ << " : starting:" << endl;
     for (uint i = 0; i < cnt; ++i) {
         cout << "    thread " << i << endl;
         args[i]._infile = srcv[i].c_str();
@@ -443,22 +478,14 @@ int main(int argc, char* argv[] ) {
         args[i]._idx = i;
         args[i]._thread = threadNames[ i+1 ];
         int err = pthread_create( &threads[i], NULL, indexOp, &args[i] );
-        if (err) cout << __TRACE__ << "Error creating thread: " << err << endl;
+        if (err) cout << __TRACE__ << " : Error creating thread: " << err << endl;
     }
 
     // wait for termination
-    cout << __TRACE__ << "waiting for thread terminations" << endl;
+    cout << __TRACE__ << " : waiting for thread terminations" << endl;
     for (uint idx = 0; idx < cnt; ++idx) {
         pthread_join( threads[idx], NULL );
     }
-
-    cout << "\n*** Thread 'main' log ***" << endl;
-    const char* thread = "main";
-    ostream* os = Logger::getStream( thread );
-    assert( NULL != os );
-    ostringstream* oss = dynamic_cast<ostringstream*>( os );
-    assert( NULL != oss );
-    cout << oss->str() << endl;
 
     for (uint idx = 0; idx < cnt; ++idx) {
         const char* thread = args[ idx ]._thread;
@@ -477,6 +504,8 @@ int main(int argc, char* argv[] ) {
     cout << " user " << (int)(elapsed/60) << "m " << elapsed - (int)(elapsed/60)*60 << 's' << endl;
     elapsed = getCpuTime(2);
     cout << " sys  " << (int)(elapsed/60) << "m " << elapsed - (int)(elapsed/60)*60 << 's' << endl;
+
+    printRUsage();
 
     mgr->close( "main" );
 }

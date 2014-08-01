@@ -1,4 +1,4 @@
-//@file buffer_mgr.cpp
+//@file bufmgr.cpp
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -47,7 +47,7 @@
 #include "common.h"
 #include "blterr.h"
 #include "bltkey.h"
-#include "buffer_mgr.h"
+#include "bufmgr.h"
 #include "latchMgr.h"
 #include "logger.h"
 #include "logger.h"
@@ -658,7 +658,7 @@ namespace mongo {
                     }
 
                     pageNo = Page::getPageNo( Page::slotptr(set->_page, slot)->_id );
-                    {
+                    if (LOADPAGE_TRACE) {
                         __OSS__( "loadPage: next pageNo = " << pageNo );
                         Logger::logDebug( thread, __ss__, __LOC__ );
                     }

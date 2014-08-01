@@ -1,4 +1,4 @@
-//@file blt_base.h
+//@file bltindex.h
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -125,11 +125,22 @@ namespace mongo {
         *  @param key  -  key to insert
         *  @param keylen  -  length of key to insert
         *  @param level  -  needed by recursive insertions: for example insert => split => insert
-        *  @param pageNo  -  page number
+        *  @param docId  -  doc unique id
         *  @param tod  -  timestamp
         *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        BLTERR insertKey( const uchar* key, uint keylen, uint level, PageNo pageNo, uint tod );
+        BLTERR insertKey( const uchar* key, uint keylen, uint level, DocId docId, uint tod );
+
+        /**
+        *  Insert new key,value into the btree at given level.
+        *  @param key  -  key to insert
+        *  @param keylen  -  length of key to insert
+        *  @param level  -  needed by recursive insertions: for example insert => split => insert
+        *  @param doc  -  document to insert
+        *  @param tod  -  timestamp
+        *  @return BLTERR::OK if no error, otherwise appropriate error
+        */
+        //BLTERR insertDoc( const uchar* key, uint keylen, uint level, Doc doc, uint tod );
 
         /**
         *  find and delete key on page by marking delete flag bit:

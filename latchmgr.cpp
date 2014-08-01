@@ -75,9 +75,13 @@ namespace mongo {
         do {
             // obtain latch mutex
             if (__sync_lock_test_and_set(latch->_mutex, 1)) {
-                if (LATCH_TRACE) Logger::logMsg( thread, "0" );
+                if (LATCH_TRACE) std::cout << '0';
                 continue;
             }
+
+            if (LATCH_TRACE) std::cout << 'a';
+
+            if (++count > 10000) exit(-1);
 
             // see if exclusive request is granted or pending
             if ( (prev = !(latch->_exclusive | latch->_pending)) ) {
@@ -85,7 +89,7 @@ namespace mongo {
             }
 
             *latch->_mutex = 0;
-            if (prev) return;
+            if (prev) { if (LATCH_TRACE) std::cout << 'R'; return; }
 
         } while (sched_yield(), 1);
     }
@@ -101,9 +105,11 @@ namespace mongo {
         uint prev;
         do {
             if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-                if (LATCH_TRACE) Logger::logMsg( thread, "1" );
+                if (LATCH_TRACE) std::cout << '1';
                 continue;
             }
+
+            if (LATCH_TRACE) std::cout << 'b';
 
             // see if shared or exclusive request is granted 
             if ((prev = !(latch->_share | latch->_exclusive))) {
@@ -114,7 +120,7 @@ namespace mongo {
                 latch->_pending = 1;
             }
             *latch->_mutex = 0;
-            if (prev) return;
+            if (prev) { if (LATCH_TRACE) std::cout << 'W'; return; }
         } while (sched_yield(), 1);
     }
  
@@ -128,9 +134,11 @@ namespace mongo {
         assert( NULL != latch );
 
         if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-            if (LATCH_TRACE) Logger::logMsg( thread, "2" );
+            if (LATCH_TRACE) std::cout << '2';
             return 0;
         }
+
+        if (LATCH_TRACE) std::cout << 'c';
 
         // take write access if all bits are clear
         uint prev;
@@ -139,6 +147,7 @@ namespace mongo {
         }
 
         *latch->_mutex = 0;
+        if (LATCH_TRACE && prev) std::cout << 'T';
         return prev;
     }
 
@@ -151,9 +160,10 @@ namespace mongo {
         assert( NULL != latch );
 
         while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            if (LATCH_TRACE) Logger::logMsg( thread, "4" );
+            if (LATCH_TRACE) std::cout << '3';
             sched_yield();
         }
+        if (LATCH_TRACE) std::cout << 'w';
         latch->_exclusive = 0;
         *latch->_mutex = 0;
     }
@@ -167,10 +177,11 @@ namespace mongo {
         assert( NULL != latch );
 
         while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            if (LATCH_TRACE) Logger::logMsg( thread, "5" );
+            if (LATCH_TRACE) std::cout << '4';
             sched_yield();
         }
-        --latch->_share;
+        if (LATCH_TRACE) std::cout << 'r';
+        latch->_share--;
         *latch->_mutex = 0;
     }
 
@@ -285,7 +296,7 @@ namespace mongo {
             set = &_latchSets[ slot ];
             __sync_fetch_and_add( &set->_pin, 1 );  // i.e. lock count++
             set->_pageNo = pageNo;
-            SpinLatch::spinReleaseRead( _table[ hashIndex ]._latch, thread );   // releaseWrite??
+            SpinLatch::spinReleaseWrite( _table[ hashIndex ]._latch, thread );
             return set;
         }
     

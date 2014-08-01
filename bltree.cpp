@@ -1,4 +1,4 @@
-//@file bltindex.cpp
+//@file bltree.cpp
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -44,11 +44,11 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
-#include "bltindex.h"
+#include "bltree.h"
 #include "common.h"
 #include "latchmgr.h"
 #include "logger.h"
-#include "buffer_mgr.h"
+#include "bufmgr.h"
 #include "page.h"
 
 #include <assert.h>
@@ -590,7 +590,7 @@ namespace mongo {
     BLTERR BLTIndex::insertKey( const uchar* inputKey,
                                 uint inputKeyLen,
                                 uint level,
-                                PageNo id,
+                                DocId id,
                                 uint tod )
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
@@ -602,13 +602,14 @@ namespace mongo {
         BLTKey* key;
     
         while (true) {
+
             // find the page (returned in 'set') and slot within page for this key
             slot = _mgr->loadPage( set, inputKey, inputKeyLen, level, LockWrite, _thread );
 
-            //if (INSERT_TRACE) {
+            if (INSERT_TRACE) {
                 __OSS__( "(pageNo,slot) = (" << set->_pageNo << ',' << slot << ')' );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
-            //}
+            }
 
             if (slot) {
                 key = Page::keyptr(set->_page, slot);

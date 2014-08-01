@@ -1,4 +1,4 @@
-//@file buffer_mgr_test.cpp
+//@file bufmgr_test.cpp
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -27,7 +27,7 @@
 *    it in the license file.
 */
 
-#include "buffer_mgr.h"
+#include "bufmgr.h"
 #include "common.h"
 #include "logger.h"
 

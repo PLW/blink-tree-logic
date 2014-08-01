@@ -13,7 +13,14 @@ int main( int argc, char* argv[] ) {
         '5','6','7','8','9'
     };
 
-    for (uint32_t i=0; i<10000; ++i) {
+    uint32_t nkeys( 10000 );
+    if (argc>1) {
+        char* endptr;
+        uint32_t n = strtoul( argv[1], &endptr, 10 );
+        if (endptr != argv[1]) nkeys = n;
+    }
+
+    for (uint32_t i=0; i<nkeys; ++i) {
         uint32_t n = 4+random()%28;
         string key;
         for (uint32_t j=0; j<n; ++j) {

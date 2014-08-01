@@ -1,4 +1,4 @@
-//@file buffer_mgr.h
+//@file bufmgr.h
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
