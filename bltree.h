@@ -1,4 +1,4 @@
-//@file bltindex.h
+//@file bltree.h
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -107,13 +107,13 @@ namespace mongo {
     class Page;
     class BufferMgr;
 
-    class BLTIndex {
+    class BLTree {
     public:
         /**
-        *  Open: allocate BLTIndex.
+        *  Open: allocate BLTree.
         *  @param mgr  -  
         */
-        static BLTIndex* create( BufferMgr* mgr, const char* threadName );
+        static BLTree* create( BufferMgr* mgr, const char* threadName );
 
         /**
         *  Close: release memory.

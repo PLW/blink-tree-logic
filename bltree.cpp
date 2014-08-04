@@ -65,24 +65,24 @@
 
 namespace mongo {
 
-    void BLTIndex::close() {
+    void BLTree::close() {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
         if (_mem) free(_mem);
     }
     
     /**
-    *  Open BLTIndex access method.
+    *  Open BLTree access method.
     *  @param mgr  -  
     *  @param log  -  
     *  @return
     */
-    BLTIndex* BLTIndex::create( BufferMgr* mgr, const char* thread ) {
+    BLTree* BLTree::create( BufferMgr* mgr, const char* thread ) {
         if (BLTINDEX_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != mgr );
         assert( NULL != thread );
 
-        BLTIndex* blt = new BLTIndex();
+        BLTree* blt = new BLTree();
         memset( blt, 0, sizeof(*blt) );
         blt->_thread    = thread;
         blt->_mgr       = mgr;
@@ -101,7 +101,7 @@ namespace mongo {
     *  @param level -  
     *  @return
     */
-    BLTERR BLTIndex::fixFenceKey( PageSet* set, uint level ) {
+    BLTERR BLTree::fixFenceKey( PageSet* set, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != set );
@@ -145,7 +145,7 @@ namespace mongo {
     *  @param root
     *  @return
     */
-    BLTERR BLTIndex::collapseRoot( PageSet* root ) {
+    BLTERR BLTree::collapseRoot( PageSet* root ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != root );
@@ -186,7 +186,7 @@ namespace mongo {
     *  find and delete key on page by marking delete flag bit,
     *  if page becomes empty, delete it from the btree.
     */
-    BLTERR BLTIndex::deleteKey( const uchar* inputKey, uint inputKeyLen, uint level ) {
+    BLTERR BLTree::deleteKey( const uchar* inputKey, uint inputKeyLen, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != inputKey );
@@ -323,7 +323,7 @@ namespace mongo {
     /**
     *  find key in leaf level and return pageNo
     */
-    DocId BLTIndex::findKey( const uchar* inputKey, uint inputKeyLen ) {
+    DocId BLTree::findKey( const uchar* inputKey, uint inputKeyLen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != inputKey );
@@ -357,7 +357,7 @@ namespace mongo {
     *  Check page for space available, clean if necessary.
     *  @return 0 - page needs splitting, >0  new slot value
     */
-    uint BLTIndex::cleanPage( Page* page, uint amt, uint slot ) {
+    uint BLTree::cleanPage( Page* page, uint amt, uint slot ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != page );
@@ -416,7 +416,7 @@ namespace mongo {
     /**
     *  split the root and raise the height of the btree
     */
-    BLTERR BLTIndex::splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo2) {
+    BLTERR BLTree::splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo2) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != root );
@@ -471,7 +471,7 @@ namespace mongo {
     *  split already locked full node
     *  return unlocked.
     */
-    BLTERR BLTIndex::splitPage( PageSet* set ) {
+    BLTERR BLTree::splitPage( PageSet* set ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != set );
@@ -587,7 +587,7 @@ namespace mongo {
     /**
     *  Insert new key into the btree at given level.
     */
-    BLTERR BLTIndex::insertKey( const uchar* inputKey,
+    BLTERR BLTree::insertKey( const uchar* inputKey,
                                 uint inputKeyLen,
                                 uint level,
                                 DocId id,
@@ -629,11 +629,11 @@ namespace mongo {
             // if key already exists, update id and return
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
 
-                {
+                /*{
                     __OSS__( "duplicate key: " << key->toString() << " :: "
                                 << std::string( (const char*)inputKey, inputKeyLen ));
                     Logger::logInfo( _thread, __ss__, __LOC__ );
-                }
+                }*/
 
                 if (Page::slotptr(set->_page, slot)->_dead) set->_page->_act++;
                 Page::slotptr(set->_page, slot)->_dead = 0;
@@ -703,7 +703,7 @@ namespace mongo {
     /**
     *  cache page of keys into cursor and return starting slot for given key
     */
-    uint BLTIndex::startKey( const uchar* key, uint keylen ) {
+    uint BLTree::startKey( const uchar* key, uint keylen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != key );
@@ -731,7 +731,7 @@ namespace mongo {
     *  return next slot for cursor page
     *  or slide cursor right into next page
     */
-    uint BLTIndex::nextKey( uint slot ) {
+    uint BLTree::nextKey( uint slot ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         PageSet set[1];
@@ -776,14 +776,14 @@ namespace mongo {
         return (_err = BLTERR_ok);
     }
     
-    BLTKey* BLTIndex::getKey( uint slot )   { return Page::keyptr(_cursor, slot); }
-    PageNo BLTIndex::getPageNo( uint slot ) { return Page::getPageNo( Page::slotptr(_cursor,slot)->_id ); }
-    uint BLTIndex::getTod( uint slot )      { return Page::slotptr(_cursor,slot)->_tod; } 
+    BLTKey* BLTree::getKey( uint slot )   { return Page::keyptr(_cursor, slot); }
+    PageNo BLTree::getPageNo( uint slot ) { return Page::getPageNo( Page::slotptr(_cursor,slot)->_id ); }
+    uint BLTree::getTod( uint slot )      { return Page::slotptr(_cursor,slot)->_tod; } 
 
     /**
     *
     */
-    void BLTIndex::latchAudit() {
+    void BLTree::latchAudit() {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         if (*(uint *)(_mgr->getLatchMgr()->_lock)) {

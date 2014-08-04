@@ -44,8 +44,8 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
-#include "bltree.h"
 #include "common.h"
+#include "bltree.h"
 #include "bufmgr.h"
 #include "logger.h"
 
@@ -53,9 +53,9 @@
 #include <pthread.h>
 #include <sstream>
 #include <string>
-#include <time.h>
-#include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/time.h>
+#include <time.h>
 #include <vector>
     
 using namespace std;
@@ -126,7 +126,7 @@ void* indexOp( void* rawArg ) {
     const char* thread = args->_thread;
 
     // per thread index accessor
-    BLTIndex* blt = BLTIndex::create( mgr, thread );
+    BLTree* blt = BLTree::create( mgr, thread );
 
     time_t tod[1];
     time( tod );
@@ -282,7 +282,7 @@ void* indexOp( void* rawArg ) {
                         BLTKey* key = Page::keyptr(page, slot);
                         strncpy( buf, (const char*)key->_key, key->_len );
                         buf[ key->_len ] = 0;
-                        Logger::logInfo( thread, buf, __LOC__ );
+                        //Logger::logInfo( thread, buf, __LOC__ );
                     }
                 }
             }
