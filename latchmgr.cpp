@@ -101,7 +101,7 @@ namespace mongo {
             }
 
             *latch->_mutex = 0;
-            if (prev) { return backoffCount; }
+            if (prev) { return backoffCount>1?backoffCount:0; }
 
         } while (sched_yield(), 1);
     }
@@ -145,7 +145,7 @@ namespace mongo {
                 latch->_pending = 1;
             }
             *latch->_mutex = 0;
-            if (prev) { return backoffCount; }
+            if (prev) { return backoffCount>1?backoffCount:0; }
 
         } while (sched_yield(), 1);
     }
