@@ -88,11 +88,11 @@ namespace mongo {
             }
 
             if (++count > limit) {
-                nanosleep( &backoff, NULL );
-                backoff.tv_nsec <<= 1;
-                limit >>= 1;
                 count = 0;
-                ++backoffCount;
+                if (++backoffCount > 1) {
+                    nanosleep( &backoff, NULL );
+                    backoff.tv_nsec <<= 1;
+                }
             }
 
             // see if exclusive request is granted or pending
@@ -129,11 +129,11 @@ namespace mongo {
             }
 
             if (++count > limit) {
-                nanosleep( &backoff, NULL );
-                backoff.tv_nsec <<= 1;
-                limit >>= 1;
                 count = 0;
-                ++backoffCount;
+                if (++backoffCount > 1) {
+                    nanosleep( &backoff, NULL );
+                    backoff.tv_nsec <<= 1;
+                }
             }
 
             // see if shared or exclusive request is granted 
