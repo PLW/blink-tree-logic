@@ -56,6 +56,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <memory.h>
+#include <stdlib.h>
 #include <sstream>
 #include <sys/mman.h>
 
