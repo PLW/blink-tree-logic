@@ -8,9 +8,9 @@
 g++ -O3 -o random_keys random_keys.cpp
 g++ -O3 -o logger logger.cpp logger_test.cpp
 g++ -O3 -o page page.cpp page_test.cpp
-g++ -O3 -o latch logger.cpp page.cpp latchmgr.cpp latchmgr_test.cpp
-g++ -O3 -o bufmgr logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp buffer_mgr_test.cpp
-g++ -O3 -o bltindex logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp bltindex.cpp bltindex_test.cpp -lpthread
+g++ -O3 -o latchmgr logger.cpp page.cpp latchmgr.cpp latchmgr_test.cpp
+g++ -O3 -o bufmgr logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bufmgr_test.cpp
+g++ -O3 -o bltree logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bltree.cpp bltree_test.cpp -lpthread
 
 # create a file of random keys
 ./random_keys >keys.txt
@@ -30,7 +30,7 @@ g++ -O3 -o bltindex logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp b
 ./bufmgr testdb 15
 
 # test BLink Tree 
-#    ./bltindex
+#    ./bltree
 #        -f dbname            - the name of the index file(s)
 #        -c cmd,cmd,..        - list of: Audit, Write, Delete, Find, Scan, Count, one per thread
 #        -k k_1,k_2,..        - matching list of source key files k_i, one per thread
@@ -41,6 +41,6 @@ g++ -O3 -o bltindex logger.cpp blterr.cpp page.cpp latchmgr.cpp buffer_mgr.cpp b
 # (e.g.) 32KB pages, 8192 segments of 32 pages each = 8GB total storage
 
 rm -f testdb
-./bltindex -f testdb -c Write -k keys.txt -p 15 -n 8192 -s 5
-./bltindex -f testdb -c Scan,Find,Find -k keys.txt,keys.txt,keys.txt -p 15 -n 8192 -s 5
+./bltree -f testdb -c Write -k keys.txt -p 15 -n 8192 -s 5
+./bltree -f testdb -c Scan,Find,Find -k keys.txt,keys.txt,keys.txt -p 15 -n 8192 -s 5
 
