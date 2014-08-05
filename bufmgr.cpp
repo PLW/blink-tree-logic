@@ -810,6 +810,10 @@ slideright: //  or slide right into next page
             Logger::logError( thread, __ss__, __LOC__ );
             return BLTERR_write;
         }
+        else {
+            __OSS__( "Writing page " << pageNo << ", thread [" << thread << "]" );
+            Logger::logDebug( "main", __ss__, __LOC__ );
+        }
         return 0;
     }
 
