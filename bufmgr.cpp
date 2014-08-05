@@ -371,7 +371,11 @@ namespace mongo {
 
 	    // lock hash table chain
 	    uint hashIndex = (uint)(pageNo >> _segBits) % _hashSize;
-	    SpinLatch::spinWriteLock( &_latch[ hashIndex ], thread );
+        uint n = 0;
+	    if ( (n = SpinLatch::spinWriteLock( &_latch[ hashIndex ], thread )) ) {
+            __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+            Logger::logDebug( "main", __ss__, __LOC__ ); 
+        }
 	
 	    // look up in hash table
 	    Pool* pool = findPool( pageNo, hashIndex, thread );
@@ -464,13 +468,44 @@ namespace mongo {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != set );
+        uint n = 0;
 
         switch( lockMode ) {
-        case LockRead:   { SpinLatch::spinReadLock( set->_readwr, thread ); break;  }
-        case LockWrite:  { SpinLatch::spinWriteLock( set->_readwr, thread ); break; }
-        case LockAccess: { SpinLatch::spinReadLock( set->_access, thread ); break;  }
-        case LockDelete: { SpinLatch::spinWriteLock( set->_access, thread ); break; }
-        case LockParent: { SpinLatch::spinWriteLock( set->_parent, thread ); break; }
+        case LockRead:   {
+            if ( (n = SpinLatch::spinReadLock( set->_readwr, thread )) ) {
+                __OSS__( "spinReadLock retry overflow on thread [" << thread << "] = " << n );
+                Logger::logDebug( "main", __ss__, __LOC__ ); 
+            }
+            break; 
+        }
+        case LockWrite:  {
+            if ( (n = SpinLatch::spinWriteLock( set->_readwr, thread )) ) {
+                __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+                Logger::logDebug( "main", __ss__, __LOC__ ); 
+            }
+            break;
+        }
+        case LockAccess: {
+            if ( (n = SpinLatch::spinReadLock( set->_access, thread )) ) {
+                __OSS__( "spinReadLock retry overflow on thread [" << thread << "] = " << n );
+                Logger::logDebug( "main", __ss__, __LOC__ ); 
+            }
+            break;
+        }
+        case LockDelete: {
+            if ( (n = SpinLatch::spinWriteLock( set->_access, thread )) ) {
+                __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+                Logger::logDebug( "main", __ss__, __LOC__ ); 
+            }
+            break;
+        }
+        case LockParent: {
+            if ( (n = SpinLatch::spinWriteLock( set->_parent, thread )) ) {
+                __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+                Logger::logDebug( "main", __ss__, __LOC__ ); 
+            }
+            break;
+        }
         }
     }
     
@@ -483,11 +518,26 @@ namespace mongo {
         assert( NULL != set );
 
         switch (lockMode) {
-        case LockRead:   { SpinLatch::spinReleaseRead( set->_readwr, thread ); break;  }
-        case LockWrite:  { SpinLatch::spinReleaseWrite( set->_readwr, thread ); break; }
-        case LockAccess: { SpinLatch::spinReleaseRead( set->_access, thread ); break;  }
-        case LockDelete: { SpinLatch::spinReleaseWrite( set->_access, thread ); break; }
-        case LockParent: { SpinLatch::spinReleaseWrite( set->_parent, thread ); break; }
+        case LockRead:   {
+            SpinLatch::spinReleaseRead( set->_readwr, thread );
+            break;
+        }
+        case LockWrite:  {
+            SpinLatch::spinReleaseWrite( set->_readwr, thread );
+            break;
+        }
+        case LockAccess: {
+            SpinLatch::spinReleaseRead( set->_access, thread );
+            break;
+        }
+        case LockDelete: {
+            SpinLatch::spinReleaseWrite( set->_access, thread );
+            break;
+        }
+        case LockParent: {
+            SpinLatch::spinReleaseWrite( set->_parent, thread );
+            break;
+        }
         }
     }
 
@@ -500,7 +550,11 @@ namespace mongo {
         assert( NULL != inputPage );
 
         // lock allocation page
-        SpinLatch::spinWriteLock( _latchMgr->_lock, thread );
+        uint n = 0;
+        if ( (n = SpinLatch::spinWriteLock( _latchMgr->_lock, thread )) ) {
+            __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+            Logger::logDebug( "main", __ss__, __LOC__ ); 
+        }
     
         // use empty chain first, else allocate empty page
         PageSet set[1];
@@ -768,7 +822,11 @@ slideright: //  or slide right into next page
         assert( NULL != set );
 
         // lock allocation page
-        SpinLatch::spinWriteLock( _latchMgr->_lock, thread );
+        uint n = 0;
+        if ( (n = SpinLatch::spinWriteLock( _latchMgr->_lock, thread )) ) {
+            __OSS__( "spinWriteLock retry overflow on thread [" << thread << "] = " << n );
+            Logger::logDebug( "main", __ss__, __LOC__ ); 
+        }
 
         // store chain in second right
         Page::putPageNo( set->_page->_right, Page::getPageNo( _latchMgr->_alloc[1]._right ) );

@@ -94,10 +94,10 @@ namespace mongo {
 	
 	class SpinLatch {
     public:
-        static void spinReadLock( SpinLatch* latch, const char* thread );
+        static uint spinReadLock( SpinLatch* latch, const char* thread );
         static void spinReleaseRead( SpinLatch* latch, const char* thread );
         static int  spinTryWrite( SpinLatch* latch, const char* thread );
-        static void spinWriteLock( SpinLatch* latch, const char* thread );
+        static uint spinWriteLock( SpinLatch* latch, const char* thread );
         static void spinReleaseWrite( SpinLatch* latch, const char* thread );
 
         friend std::ostream& operator<<( std::ostream& os, const SpinLatch& latch );

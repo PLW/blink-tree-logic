@@ -49,9 +49,11 @@
 #include "bufmgr.h"
 #include "logger.h"
 
+#include <errno.h>
 #include <iostream>
 #include <pthread.h>
 #include <sstream>
+#include <stdio.h>
 #include <string>
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -88,7 +90,7 @@ void printRUsage() {
     getrusage( RUSAGE_SELF, used );
 
     cout
-        << "\nProcess resouce usage:"
+        << "\nProcess resource usage:"
         << "\nmaximum resident set size = " << used->ru_maxrss 
         << "\nintegral shared memory size = " << used->ru_ixrss
         << "\nintegral unshared data size = " << used->ru_idrss

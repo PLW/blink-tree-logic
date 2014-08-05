@@ -44,7 +44,9 @@ namespace mongo {
     #define __OSS__(X)      std::ostringstream __oss__; __oss__ << X; std::string __ss__ = __oss__.str();
 
     // allow big files on 32-bit linux
+#ifdef LINUX32
     #define _LARGEFILE64_SOURCE 
+#endif
 
     // default mmap alignment
     #define MMAP_MIN_SIZE   4096

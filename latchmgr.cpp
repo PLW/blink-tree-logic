@@ -50,7 +50,10 @@
 #include "logger.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <sstream>
+#include <time.h>
+#include <unistd.h>
 
 #define LATCHMGR_TRACE  false
 
@@ -64,24 +67,33 @@ namespace mongo {
     *  wait until write lock mode is clear,
     *  and add 1 to the share count
     */
-    void SpinLatch::spinReadLock( SpinLatch* latch, const char* thread ) {
+    uint SpinLatch::spinReadLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != latch );
 
         ushort prev;
         uint count = 0;
+        uint limit = 100000;
+        uint backoffCount = 0;
+
+        struct timespec backoff;
+        backoff.tv_sec = 0;
+        backoff.tv_nsec = 1 + random() % 10;
 
         do {
             // obtain latch mutex
-            if (__sync_lock_test_and_set(latch->_mutex, 1)) {
-                if (LATCH_TRACE) std::cout << '0';
+            if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
             }
 
-            if (LATCH_TRACE) std::cout << 'a';
-
-            if (++count > 10000) exit(-1);
+            if (++count > limit) {
+                nanosleep( &backoff, NULL );
+                backoff.tv_nsec <<= 1;
+                limit >>= 1;
+                count = 0;
+                ++backoffCount;
+            }
 
             // see if exclusive request is granted or pending
             if ( (prev = !(latch->_exclusive | latch->_pending)) ) {
@@ -89,7 +101,7 @@ namespace mongo {
             }
 
             *latch->_mutex = 0;
-            if (prev) { if (LATCH_TRACE) std::cout << 'R'; return; }
+            if (prev) { return backoffCount; }
 
         } while (sched_yield(), 1);
     }
@@ -97,19 +109,32 @@ namespace mongo {
     /**
     *  wait for other read and write latches to relinquish
     */
-    void SpinLatch::spinWriteLock( SpinLatch* latch, const char* thread ) {
+    uint SpinLatch::spinWriteLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != latch );
 
-        uint prev;
+        ushort prev;
+        uint count = 0;
+        uint limit = 100000;
+        uint backoffCount = 0;
+
+        struct timespec backoff;
+        backoff.tv_sec = 0;
+        backoff.tv_nsec = 1 + random() % 10;
+
         do {
-            if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-                if (LATCH_TRACE) std::cout << '1';
+            if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
             }
 
-            if (LATCH_TRACE) std::cout << 'b';
+            if (++count > limit) {
+                nanosleep( &backoff, NULL );
+                backoff.tv_nsec <<= 1;
+                limit >>= 1;
+                count = 0;
+                ++backoffCount;
+            }
 
             // see if shared or exclusive request is granted 
             if ((prev = !(latch->_share | latch->_exclusive))) {
@@ -120,7 +145,8 @@ namespace mongo {
                 latch->_pending = 1;
             }
             *latch->_mutex = 0;
-            if (prev) { if (LATCH_TRACE) std::cout << 'W'; return; }
+            if (prev) { return backoffCount; }
+
         } while (sched_yield(), 1);
     }
  
@@ -133,12 +159,9 @@ namespace mongo {
 
         assert( NULL != latch );
 
-        if (__sync_lock_test_and_set( latch->_mutex, 1 )) {
-            if (LATCH_TRACE) std::cout << '2';
+        if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             return 0;
         }
-
-        if (LATCH_TRACE) std::cout << 'c';
 
         // take write access if all bits are clear
         uint prev;
@@ -147,7 +170,6 @@ namespace mongo {
         }
 
         *latch->_mutex = 0;
-        if (LATCH_TRACE && prev) std::cout << 'T';
         return prev;
     }
 
@@ -159,11 +181,9 @@ namespace mongo {
 
         assert( NULL != latch );
 
-        while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            if (LATCH_TRACE) std::cout << '3';
+        while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             sched_yield();
         }
-        if (LATCH_TRACE) std::cout << 'w';
         latch->_exclusive = 0;
         *latch->_mutex = 0;
     }
@@ -176,11 +196,9 @@ namespace mongo {
 
         assert( NULL != latch );
 
-        while (__sync_lock_test_and_set(latch->_mutex, 1)) {
-            if (LATCH_TRACE) std::cout << '4';
+        while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             sched_yield();
         }
-        if (LATCH_TRACE) std::cout << 'r';
         latch->_share--;
         *latch->_mutex = 0;
     }
