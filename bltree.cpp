@@ -112,9 +112,9 @@ namespace mongo {
         BLTKey* key;
     
         // remove the old fence value
-        key = Page::keyptr( set->_page, set->_page->_cnt );
-        memcpy( rightKey, key, key->_len + 1);
-        memset( Page::slotptr( set->_page, set->_page->_cnt-- ), 0, sizeof(Slot) );
+        key = Page::keyptr( set->_page, set->_page->_cnt );	// i.e. pull out fence key
+        memcpy( rightKey, key, key->_len + 1);				// save it
+        memset( Page::slotptr( set->_page, set->_page->_cnt-- ), 0, sizeof(Slot) );		// clear out fence slot
         set->_page->_dirty = 1;
     
         key = Page::keyptr( set->_page, set->_page->_cnt);
@@ -124,12 +124,12 @@ namespace mongo {
         _mgr->lockPage( LockParent, set->_latch, _thread );
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
-        // insert new (now smaller) fence key
+        // insert new (now smaller) fence key / upstairs
         if (insertKey( leftKey+1, *leftKey, level+1, pageNo, time(NULL) )) {
             return _err;
         }
     
-        // delete old fence key
+        // delete old fence key / upstairs
         if (deleteKey( rightKey+1, *rightKey, level+1 )) {
             return _err;
         }
@@ -152,18 +152,20 @@ namespace mongo {
 
         PageSet child[1];
     
-        // find the child entry and promote as new root contents
+		// collapse a linear chain from root
         do {
+        	// find the only child entry
             uint idx;
             for (idx = 0; idx++ < root->_page->_cnt; ) {
                 if (!Page::slotptr(root->_page, idx)->_dead) break;
             }
         
+        	// and promote as new root contents
             child->_pageNo = Page::getPageNo( Page::slotptr(root->_page, idx)->_id );
         
             child->_latch = _mgr->getLatchMgr()->pinLatch( child->_pageNo, _thread );
-            _mgr->lockPage( LockDelete, child->_latch, _thread );
-            _mgr->lockPage( LockWrite, child->_latch, _thread );
+            _mgr->lockPage( LockDelete, child->_latch, _thread );	// waits on AI locks
+            _mgr->lockPage( LockWrite, child->_latch, _thread );	// prepare to modify
         
             if ( (child->_pool = _mgr->pinPool( child->_pageNo, _thread )) ) {
                 child->_page = _mgr->page( child->_pool, child->_pageNo, _thread );
@@ -174,7 +176,7 @@ namespace mongo {
             memcpy( root->_page, child->_page, _mgr->getPageSize() );
             _mgr->freePage( child, _thread );
     
-        } while (root->_page->_level > 1 && root->_page->_act == 1 );
+        } while (root->_page->_level > 1 && root->_page->_act == 1 /* i.e. single child */ );
     
         _mgr->unlockPage( LockWrite, root->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( root->_latch, _thread );
@@ -185,6 +187,14 @@ namespace mongo {
     /**
     *  find and delete key on page by marking delete flag bit,
     *  if page becomes empty, delete it from the btree.
+    *
+    *  Note: emptied block is one to the right, if any.
+    *  			It's a singly linked list, we access one to the right,
+    *  			move all the keys into the current (empty) node,
+    *  			and delete the guy to the right.  If no node to the
+    *  			right then we skip this step, leave an empty node,
+    *  			available for use in the tree - for cuurent_max < key <= +infty
+    *  	
     */
     BLTERR BLTree::deleteKey( const uchar* inputKey, uint inputKeyLen, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
@@ -228,7 +238,7 @@ namespace mongo {
             }
         }
     
-        // did we delete a fence key in an upper level?
+        // did we delete a fence key in an upper level (internal node)?
         if (dirty && level && set->_page->_act && fence) {
             if (fixFenceKey( set, level )) {
                 return _err;
@@ -239,7 +249,7 @@ namespace mongo {
             }
         }
     
-        // is this a collapsed root?
+        // is this a collapsed root?   Note: root is never below level 1
         if (level > 1 && set->_pageNo == ROOT_page && set->_page->_act == 1) {
             if (collapseRoot( set )) {
                 return _err;
@@ -357,7 +367,7 @@ namespace mongo {
     *  Check page for space available, clean if necessary.
     *  @return 0 - page needs splitting, >0  new slot value
     */
-    uint BLTree::cleanPage( Page* page, uint amt, uint slot ) {
+    uint BLTree::cleanPage( Page* page, uint amt, uint slot ) {	// XX fix: amt -> inputKeyLen
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         assert( NULL != page );
@@ -368,11 +378,12 @@ namespace mongo {
         uint newslot = max;
         BLTKey* key;
     
+		// check if room for one more slot + the new key
         if (page->_min >= (max+1) * sizeof(Slot) + sizeof(*page) + amt + 1 ) {
             return slot;
         }
     
-        //    skip cleanup if nothing to reclaim
+        // skip cleanup if nothing to reclaim
         if (!page->_dirty ) return 0;
     
         memcpy( _frame, page, _mgr->getPageSize() );
@@ -588,10 +599,10 @@ namespace mongo {
     *  Insert new key into the btree at given level.
     */
     BLTERR BLTree::insertKey( const uchar* inputKey,
-                                uint inputKeyLen,
-                                uint level,
-                                DocId id,
-                                uint tod )
+                              uint inputKeyLen,
+                              uint level,
+                              DocId id,
+                              uint tod )
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 

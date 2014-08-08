@@ -111,7 +111,7 @@ namespace mongo {
 	    volatile uchar _pending:1;
 	    volatile uint16_t _share;        // count of read accessors
 	};
-	
+
 	struct HashEntry {
 	    SpinLatch _latch[1];
 	    volatile uint16_t _slot;    // latch table entry at head of chain
@@ -124,7 +124,7 @@ namespace mongo {
 	    SpinLatch _busy[1];         // slot is being moved between chains
 	    volatile uint16_t _next;    // next entry in hash table chain
 	    volatile uint16_t _prev;    // prev entry in hash table chain
-	    volatile uint16_t _pin;     // number of outstanding locks
+	    volatile uint16_t _pin;     // pin count = number of threads using the latch <- XX check this
 	    volatile uint16_t _hash;    // hash slot of this entry
 	    volatile PageNo _pageNo;    // latch set page number
 
@@ -156,6 +156,8 @@ namespace mongo {
 
     public:
 	    Page _alloc[2];             // next and free page numbers in right ptr
+									//   _latchmgr->_alloc == size of file / page size
+									//   _latchmgr->_alloc[1] == free pageNo
 	    SpinLatch _lock[1];         // allocation area latch
 	    ushort _latchDeployed;      // highest number of latch entries deployed
 	    ushort _nlatchPage;         // number of latch pages at BT_latch
@@ -163,7 +165,14 @@ namespace mongo {
 	    ushort _latchHash;          // number of latch hash table slots
 	    ushort _latchVictim;        // next latch entry to examine
 	    LatchSet* _latchSets;       // mapped latch set from latch pages
-	    HashEntry _table[0];        // the hash table
+	    HashEntry _table[0];        // the hash table, a map : pageNo --> LatchSet
 	};
 
 }   // namespace mongo
+
+
+		/*
+ 			Page _header[1];
+		 	uchar _next[IdLength];
+		 	uchar _free[IdLength];
+ 		*/

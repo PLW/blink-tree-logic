@@ -107,9 +107,6 @@ namespace mongo {
         uint cacheBlockSize = MMAP_MIN_SIZE;                    // (e.g.) 4KB
         LatchMgr* latchMgr = (LatchMgr*)malloc( BLT_maxpage );  // (e.g.) 16MB
 
-        uint amt[1];
-        *amt = 0;
-    
         // read minimum page size to get root info
         off_t fileSize = lseek( fd, 0L, SEEK_END );
         if (fileSize) {
@@ -160,7 +157,7 @@ namespace mongo {
         mgr->_zero  = (Page*)malloc( mgr->_pageSize ); 
         memset( mgr->_zero, 0, mgr->_pageSize );
     
-        if (fileSize || *amt) {
+        if (fileSize) {
             if (!mgr->mapLatches( "main" )) return NULL;
             free( latchMgr );
             return mgr;
@@ -173,23 +170,23 @@ namespace mongo {
         //   - page(s) of latches
 
         memset( latchMgr, 0, pageSize );
-        uint nlatchPage = BLT_latchtable / (pageSize / sizeof(LatchSet)) + 1; 
-        Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage);
+        uint nlatchPage = BLT_latchtable / (pageSize / sizeof(LatchSet)) + 1; 	// round up
+        Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage);	// first free page
         latchMgr->_alloc->_bits = bits;
-        latchMgr->_nlatchPage = nlatchPage;
+        latchMgr->_nlatchPage = nlatchPage;		// 
         latchMgr->_latchTotal = nlatchPage * (pageSize / sizeof(LatchSet));
     
-        // initialize latch manager
+        // initialize latch manager hash table : # hash entries available in rest of page 0
         uint latchHash = (pageSize - sizeof(LatchMgr)) / sizeof(HashEntry);
     
-        // size of hash table = total number of latchsets
+        // size of hash table = total number of latchsets : #latches may actually be smaller, use that
         if (latchHash > latchMgr->_latchTotal) {
             latchHash = latchMgr->_latchTotal;
         }
     
         latchMgr->_latchHash = latchHash;
     
-        if (write( fd, latchMgr, pageSize) < pageSize) {
+        if (write( fd, latchMgr, pageSize ) < pageSize) {	// latches available as shared  memory
             __OSS__( "write( " << name << " ) syserr: " << strerror(errno) );
             Logger::logError( "main", __ss__, __LOC__ );
             mgr->close( "main" );
@@ -199,18 +196,21 @@ namespace mongo {
         memset( latchMgr, 0, pageSize );
         latchMgr->_alloc->_bits = bits;
     
+		// initialize root page and leaf page
         for (uint level = MIN_level; level--; ) {
-            Page::slotptr(latchMgr->_alloc, 1)->_off = pageSize - 3;
-            Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,
-                            level ? MIN_level - level + 1 : 0); // next docid
+            Page::slotptr(latchMgr->_alloc, 1)->_off = pageSize - 3;	// top 3 bytes are +infty key
+            Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,	// level==0 -> leaf, level==1 -> root, initially
+                            	level ? MIN_level - level + 1 : 0); 	// next docid, (e.g.) 2, then 0
             BLTKey* key = Page::keyptr(latchMgr->_alloc, 1);
-            key->_len = 2;        // create stopper key
+            key->_len = 2;        	// create stopper key: +infty
             key->_key[0] = 0xff;
             key->_key[1] = 0xff;
+
             latchMgr->_alloc->_min = pageSize - 3;
             latchMgr->_alloc->_level = level;
             latchMgr->_alloc->_cnt = 1;
             latchMgr->_alloc->_act = 1;
+
             if (write(fd, latchMgr, pageSize) < pageSize) {
                 __OSS__( "write( " << name << " ) syserr: " << strerror(errno) );
                 Logger::logError( "main", __ss__, __LOC__ );
@@ -222,10 +222,10 @@ namespace mongo {
         // clear out latch manager locks
         //   and rest of pages to round out segment
         memset( latchMgr, 0, pageSize);
-        uint last = MIN_level + 1;
+        uint last = MIN_level + 1;		// (e.g.) 3
     
-        while (last <= ((MIN_level + 1 + nlatchPage) | mgr->_poolMask)) {
-            pwrite( fd, latchMgr, pageSize, (last << bits) );
+        while (last <= ((MIN_level + 1 + nlatchPage) | mgr->_poolMask)) {	// (i.e.) entire first segment
+            pwrite( fd, latchMgr, pageSize, (last << bits) );		// write one page
             ++last;
         }
 
@@ -236,6 +236,7 @@ namespace mongo {
 
     #define MAPLATCHES_TRACE    false
 
+	// note: bufmgr is shared by all threads, hence these mmap's are not colliding
     bool BufferMgr::mapLatches( const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
  
@@ -272,6 +273,7 @@ namespace mongo {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         // release mapped pages. note: slot zero is never used
+        // 		slot 0 == NULL slot, slot 0 is vacant
         for (uint slot = 1; slot < _poolMax; ++slot) {
             Pool* pool = &_pool[ slot ];
             if (pool->_slot) {
@@ -298,7 +300,7 @@ namespace mongo {
         uint slot = _hash[ hashIndex ];
         if (!slot) return NULL;
 
-        Pool* pool = &_pool[ slot ];
+        Pool* pool = &_pool[ slot ];		// XX Pool -> rename --> Segment
         pageNo &= ~(_poolMask);
 
         while (pool->_basePage != pageNo) {
@@ -356,8 +358,7 @@ namespace mongo {
         assert( NULL != pool );
 
 	    uint subpage = (uint)(pageNo & _poolMask); // page within mapping
-	    Page* page = (Page*)(pool->_map + (subpage << _pageBits));
-	    return page;
+	    return (Page*)(pool->_map + (subpage << _pageBits));
 	}
 
 
@@ -381,7 +382,7 @@ namespace mongo {
 	    // look up in hash table
 	    Pool* pool = findPool( pageNo, hashIndex, thread );
 	    if (pool) {
-	        __sync_fetch_and_or( &pool->_pin, CLOCK_bit);
+	        __sync_fetch_and_or( &pool->_pin, CLOCK_bit);		// XX -> check this for thread safety
 	        __sync_fetch_and_add( &pool->_pin, 1);
 	        SpinLatch::spinReleaseWrite( &_latch[ hashIndex ], thread );
 	        return pool;
@@ -644,10 +645,10 @@ namespace mongo {
                 return 0;
             }
 
-            // obtain access lock using lock chaining with Access mode
-            if (pageNo > ROOT_page) {
-                lockPage( LockAccess, set->_latch, thread );
-            }
+        	// obtain access lock using lock chaining with Access mode
+        	if (pageNo > ROOT_page) {
+            	lockPage( LockAccess, set->_latch, thread );
+        	}
 
             // release and unpin parent page
             if (prevPageNo) {
@@ -667,11 +668,13 @@ namespace mongo {
                 return 0;
             }
 
-            if (pageNo > ROOT_page) {
-                unlockPage( LockAccess, set->_latch, thread );
-            }
+			// release access lock
+        	if (pageNo > ROOT_page) {
+            	unlockPage( LockAccess, set->_latch, thread );
+        	}
 
             // re-read and re-lock root after finding root level
+            // Q: please explain
             if (set->_page->_level != drill) {
                 if (set->_pageNo != ROOT_page) {
                     __OSS__( "level!=drill  on page: " << set->_pageNo );

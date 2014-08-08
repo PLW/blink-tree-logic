@@ -73,26 +73,11 @@ namespace mongo {
         assert( NULL != latch );
 
         ushort prev;
-        uint count = 0;
-        uint limit = 100000;
-        uint backoffCount = 0;
-
-        struct timespec backoff;
-        backoff.tv_sec = 0;
-        backoff.tv_nsec = 1 + random() % 10;
-
+        
         do {
             // obtain latch mutex
             if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
-            }
-
-            if (++count > limit) {
-                count = 0;
-                if (++backoffCount > 1) {
-                    nanosleep( &backoff, NULL );
-                    backoff.tv_nsec <<= 1;
-                }
             }
 
             // see if exclusive request is granted or pending
@@ -101,7 +86,7 @@ namespace mongo {
             }
 
             *latch->_mutex = 0;
-            if (prev) { return backoffCount>1?backoffCount:0; }
+            if (prev) { return 0; }
 
         } while (sched_yield(), 1);
     }
@@ -115,25 +100,10 @@ namespace mongo {
         assert( NULL != latch );
 
         ushort prev;
-        uint count = 0;
-        uint limit = 100000;
-        uint backoffCount = 0;
-
-        struct timespec backoff;
-        backoff.tv_sec = 0;
-        backoff.tv_nsec = 1 + random() % 10;
 
         do {
             if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
-            }
-
-            if (++count > limit) {
-                count = 0;
-                if (++backoffCount > 1) {
-                    nanosleep( &backoff, NULL );
-                    backoff.tv_nsec <<= 1;
-                }
             }
 
             // see if shared or exclusive request is granted 
@@ -145,7 +115,7 @@ namespace mongo {
                 latch->_pending = 1;
             }
             *latch->_mutex = 0;
-            if (prev) { return backoffCount>1?backoffCount:0; }
+            if (prev) { return 0; }
 
         } while (sched_yield(), 1);
     }
@@ -356,6 +326,7 @@ namespace mongo {
             }
     
             // check again: don't use a pinned set
+            // may be pinned between the two clauses of previous ||
             if (set->_pin) {
                 SpinLatch::spinReleaseWrite( set->_busy, thread );
                 SpinLatch::spinReleaseWrite( _table[idx]._latch, thread );

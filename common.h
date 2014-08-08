@@ -62,7 +62,7 @@ namespace mongo {
     #define BLT_maxbits     24                  // maximum page size in bits = lg(16M)
     #define BLT_minpage     (1<<BLT_minbits)    // minimum page size = 512
     #define BLT_maxpage     (1<<BLT_maxbits)    // maximum page size = 16MB
-    #define BLT_latchtable  128                 // number of latch manager slots
+    #define BLT_latchtable  128                 // number of latch manager slots <-- XX contemplate increasing for more threads
 
     // file open modes
     #define BLT_ro          0x6f72              // read-only
@@ -73,7 +73,7 @@ namespace mongo {
     #define MIN_level       2
     #define MAX_level       15
     
-    // static page id's
+    // static pageno's
     #define ALLOC_page      0
     #define ROOT_page       1
     #define LEAF_page       2
