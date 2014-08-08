@@ -54,7 +54,7 @@
 namespace mongo {
 
     struct LatchSet;
-    class Pool;
+    class PoolEntry;
 
     /**
     *  Page key slot definition.
@@ -132,7 +132,7 @@ namespace mongo {
     struct PageSet {
         PageNo    _pageNo;          // current page number
         Page*     _page;            // current page pointer
-        Pool*     _pool;            // current page pool
+        PoolEntry*     _pool;            // current page pool
         LatchSet* _latch;           // current page latch set
     };
 

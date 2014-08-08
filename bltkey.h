@@ -46,8 +46,8 @@ namespace mongo {
         /**
         *  compare two keys,
         */
-        static int keycmp( BLTKey* key1, const uchar* key2, uint32_t len2 ) {
-            uint32_t len1 = key1->_len;
+        static int keycmp( BLTKey* key1, const uchar* key2, uint len2 ) {
+            uint len1 = key1->_len;
             int ans;
    
             if ((ans = memcmp(key1->_key, key2, len1 > len2 ? len2 : len1))) return ans;
@@ -60,8 +60,8 @@ namespace mongo {
         *  compare two keys,
         */
         static int keycmp(BLTKey* key1, BLTKey* key2) {
-            uint32_t len1 = key1->_len;
-            uint32_t len2 = key2->_len;
+            uint len1 = key1->_len;
+            uint len2 = key2->_len;
             int ans = memcmp(key1->_key, key2->_key, len1 > len2 ? len2 : len1);
             if (ans) return ans;
             if (len1 > len2) return 1;

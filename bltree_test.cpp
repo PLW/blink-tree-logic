@@ -262,7 +262,7 @@ void* indexOp( void* rawArg ) {
         char buf[256];
 
         do {
-            if ((set->_pool = mgr->pinPool( pageNo, thread ))) {
+            if ((set->_pool = mgr->pinPoolEntry( pageNo, thread ))) {
                 set->_page = mgr->page( set->_pool, pageNo, thread );
             }
             else {
@@ -291,7 +291,7 @@ void* indexOp( void* rawArg ) {
 
             mgr->unlockPage( LockRead, set->_latch, thread );
             mgr->getLatchMgr()->unpinLatch( set->_latch, thread );
-            mgr->unpinPool( set->_pool, thread );
+            mgr->unpinPoolEntry( set->_pool, thread );
         } while ((pageNo = next));
 
         --cnt;    // don't count stop/sentinel key
@@ -341,7 +341,7 @@ void usage( const char* arg0 ) {
             "  -f dbname      - the name of the index file(s)\n"
             "  -c cmd         - one of: Audit, Write, Delete, Find, Scan, Count\n"
             "  -p PageBits    - page size in bits; default 16\n"
-            "  -n PoolSize    - number of buffer pool mmapped page segments; default 8192\n"
+            "  -n PoolEntrySize    - number of buffer pool mmapped page segments; default 8192\n"
             "  -s SegBits     - segment size in pages in bits; default 5\n"
             "  -k k_1,k_2,..  - list of source key files k_i, one per thread" << endl;
 }

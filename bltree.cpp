@@ -65,6 +65,65 @@
 
 namespace mongo {
 
+	/**
+	*	This is an implementation of the Lehman-Yao B-Link tree data type.
+	*
+	*	[LH] Lehman, Philip and Yao, S. Bing: "Efficient Locking for Concurrent
+	*		 Operations on B-Trees, "ACM Transactions on Database Systems,
+	*		 Vol 6, No 4, 1981, pp. 650-670.
+	*
+	*	Leaf nodes are at level 0 and contain doc locators.
+	*	Internal nodes include only separator keys and child page locators.
+	*
+	*	Range queries a <= k < b are resolved by locating the (page,slot)
+	*	of min { (k,loc) : a <= k }, and max { (k,loc) : k < b }, then
+	*	traversing leaf nodes from min (page,slot) to max (page,slot).
+	*
+	*	Nodes are managed with fine-grained locking, one LatchSet per page.
+	*	A LatchSet includes three independent latches for managing
+	*
+	*		1. access-intent / delete
+	*		2. read / write
+	*		3. parent fence key update
+	*
+	*	See the documentation in latchmgr.h for details, specifically, the
+	*	compatibility matrix for each latch.  The sets are independent, so you can
+	*	hold an access-intent and a read latch at the same time, for instance.
+	*
+	*	In the original Lehman-Yao paper, insertion maintained a stack of nodes
+	*	traversed, and then popped the stack to determine where to place new separator
+	*	keys in the event of a node split.  If an ancestor node were split by some
+	*	other thread, then the current thread may need to traverse a right sibling
+	*	link to find the node where the new separator key should go.  Hence the name
+	*	'B-Link' tree.  In our implementation, no stack is maintained.  Instead,
+	*	the insertKey method recursively call itself with the separator key and a
+	*	'level' parameter == L+1 == parent level.  This entails retraversing from
+	*	the root to the parent node.
+	*
+	*	[LY] did not provide an algorithm for deletion and reuse of vacant nodes.
+	*	But
+	*
+	*	[LS] Lanin, Vladimir and Shasha, Dennis: "A symmetric concurrent B-tree
+	*		 algorithm," Proc. ACM 86, 1986, pp. 380-389.
+	*
+	*	does provides a proposal for such an algorithm.  We implement an algorithm
+	*	similar to [LS] by setting tombstones and decrementing a count of
+	*	active keys.  Once the active key count decrements to 0, the node is empty
+	*	and may be reclaimed.  (The implementation does not currently attempt to
+	*	consolidate sparse adjacent non-empty siblings.)  The empty node's right
+	*	sibling keys are transferred into the empty node.  The right sibling is then
+	*	spliced out of the sibling list and moved to the head of the free list.
+	*	This is done because the sibling list is singly linked, and we have no
+	*	predecesor link.  In the case where the empty node is the last node on
+	*	given level, and has no right sibling, it is left in place and is available
+	*	to contain new keys with curMax < key <= +infty.  During the deletion,
+	*	the empty node's right sibling pointer is reused as a forwarding pointer
+	*	to the left sibling, allowing concurrent read access though (the now obsolete)
+	*	empty right sibling.
+	*
+	*
+	*/
+
     void BLTree::close() {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
         if (_mem) free(_mem);
@@ -136,7 +195,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockParent, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         return BLTERR_ok;
     }
     
@@ -167,7 +226,7 @@ namespace mongo {
             _mgr->lockPage( LockDelete, child->_latch, _thread );	// waits on AI locks
             _mgr->lockPage( LockWrite, child->_latch, _thread );	// prepare to modify
         
-            if ( (child->_pool = _mgr->pinPool( child->_pageNo, _thread )) ) {
+            if ( (child->_pool = _mgr->pinPoolEntry( child->_pageNo, _thread )) ) {
                 child->_page = _mgr->page( child->_pool, child->_pageNo, _thread );
             }
             else {
@@ -180,7 +239,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockWrite, root->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( root->_latch, _thread );
-        _mgr->unpinPool( root->_pool, _thread );
+        _mgr->unpinPoolEntry( root->_pool, _thread );
         return BLTERR_ok;
     }
     
@@ -264,7 +323,7 @@ namespace mongo {
         if (set->_page->_act) {
             _mgr->unlockPage( LockWrite, set->_latch, _thread );
             _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-            _mgr->unpinPool( set->_pool, _thread );
+            _mgr->unpinPoolEntry( set->_pool, _thread );
             _found = found;
             return BLTERR_ok;
         }
@@ -279,7 +338,7 @@ namespace mongo {
         _mgr->lockPage( LockWrite, right->_latch, _thread );
 
         // pin page contents
-        right->_pool = _mgr->pinPool( right->_pageNo, _thread );
+        right->_pool = _mgr->pinPoolEntry( right->_pageNo, _thread );
         if (right->_pool) {
             right->_page = _mgr->page( right->_pool, right->_pageNo, _thread );
         }
@@ -325,7 +384,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockParent, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         _found = found;
         return BLTERR_ok;
     }
@@ -359,7 +418,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockRead, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         return id;
     }
     
@@ -474,7 +533,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockWrite, root->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( root->_latch, _thread );
-        _mgr->unpinPool( root->_pool, _thread );
+        _mgr->unpinPoolEntry( root->_pool, _thread );
         return BLTERR_ok;
     }
     
@@ -587,7 +646,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockParent, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         _mgr->unlockPage( LockParent, right->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( right->_latch, _thread );
         return BLTERR_ok;
@@ -652,7 +711,7 @@ namespace mongo {
                 Page::putDocId( Page::slotptr(set->_page,slot)->_id, id );
                 _mgr->unlockPage( LockWrite, set->_latch, _thread );
                 _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-                _mgr->unpinPool( set->_pool, _thread );
+                _mgr->unpinPoolEntry( set->_pool, _thread );
                 return BLTERR_ok;
             }
     
@@ -669,10 +728,10 @@ namespace mongo {
         //                                          v
         //    [ slot|slot|..|slot| ...free-space... |len,key|..|len,key|len,key]
         //
-        set->_page->_min -= inputKeyLen + 1;    // reset lowest used offset
+        set->_page->_min -= inputKeyLen + 1;                    // reset lowest used offset
         ((uchar *)set->_page)[set->_page->_min] = inputKeyLen;  // 256 byte max length
         memcpy( (uchar *)set->_page + set->_page->_min + 1, inputKey, inputKeyLen );
-    
+
         // check for an empty slot
         uint idx;
         for (idx = slot; idx < set->_page->_cnt; idx++) {
@@ -707,7 +766,7 @@ namespace mongo {
         // unlock and return
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         return BLTERR_ok;
     }
     
@@ -734,7 +793,7 @@ namespace mongo {
     
         _mgr->unlockPage( LockRead, set->_latch, _thread );
         _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPool( set->_pool, _thread );
+        _mgr->unpinPoolEntry( set->_pool, _thread );
         return slot;
     }
     
@@ -765,7 +824,7 @@ namespace mongo {
             if (!right ) break;
             _cursorPage = right;
      
-            if ((set->_pool = _mgr->pinPool( right, _thread ))) {
+            if ((set->_pool = _mgr->pinPoolEntry( right, _thread ))) {
                 set->_page = _mgr->page( set->_pool, right, _thread );
             }
             else {
@@ -779,7 +838,7 @@ namespace mongo {
      
             _mgr->unlockPage( LockRead, set->_latch, _thread );
             _mgr->getLatchMgr()->unpinLatch( set->_latch, _thread );
-            _mgr->unpinPool( set->_pool, _thread );
+            _mgr->unpinPoolEntry( set->_pool, _thread );
             slot = 0;
     
         } while (true);

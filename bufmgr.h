@@ -57,20 +57,134 @@
 
 namespace mongo {
 
+/**
+ *    The buffer manager manages a pool of 'segments'.   Each segment is
+ *    memory mapped.  Segment base addresses are multiples of the segment
+ *    size.
+ *
+ *    Each segment contains some number of 'pages'.  Pages are configured
+ *    to have size some power of two between 9 .. 24, (i.e.) 512B .. 16MB.
+ *
+ *    A small number of pages are allocated to contain latches and other
+ *    internal housekeeping data.   The remaining pages comprise the B-Link
+ *    tree nodes.
+ *
+ *    The pages are assigned as follows:
+ *
+ *        +--------+
+ *      0 | alloc  |  free list, allocation metatdata
+ *        | page   | 
+ *        +--------+
+ *      1 | root   |
+ *        | node   |
+ *        +--------+
+ *      2 | left   |
+ *        | leaf   |
+ *        +--------+ --
+ *      3 |        |   |
+ *        |        |   |
+ *        +--------+   |
+ *      4 |        |   |
+ *        |        |   |
+ *        +--------+    > page latch table
+ *           ...       |
+ *                     |
+ *        +--------+   |
+ *  127+3 |        |   |
+ *        |        |   |
+ *        +--------+ --
+ *        |        |   |
+ *        |        |   |
+ *        +--------+   |
+ *        |        |   |
+ *        |        |   |
+ *        +--------+    > PoolEntry pointer table
+ *           ...       | 
+ *        +--------+   |
+ *        |        |   |
+ *        |        |   |
+ *        +--------+ --
+ *        |        |   |
+ *        |        |   |
+ *        +--------+   |
+ *        |        |   |
+ *        |        |   |
+ *        +--------+    > B-Link tree nodes
+ *            ...      |
+ *        +--------+   |
+ *        |        |   |
+ *        |        |   |
+ *        +--------+ --
+ *
+ *
+ *    Each page contains:
+ *
+ *      +--------+
+ *        | header |  |
+ *        +--------+
+ *        | slots  |  | increasing addresses
+ *          ...       V 
+ *        +--------+
+ *          ...      <--_min == next available key offset
+ *        | keys   |
+ *        +--------+
+ *
+ *    Fixed width slots at low addresses grow upward, and a set of
+ *    corresponding variable width keys at high addreses grow downward.
+ *    The slots are managed as a packed ordered array suitable for binary
+ *    search.   The keys are managed as a simple heap.
+ *
+ *    The page header includes
+ *
+ *      uint32_t _cnt;              // count of keys in page
+ *         uint32_t _act;              // count of active keys
+ *         uint32_t _min;              // next key offset
+ *         uchar _bits:7;              // page size in bits, only really need 5 bits here
+ *         uchar _free:1;              // page is on free list
+ *         uchar _level:6;             // level of page, between 0 == leaf, and 64 > max == root
+ *         uchar _kill:1;              // page is being deleted
+ *         uchar _dirty:1;             // page has deleted keys
+ *         uchar _right[IdLength];     // page number to right: all nodes on a given
+ *                                     //    level form a singly linked list.
+ *
+ *     The slot entries include
+ *
+ *         uint32_t _off:BLT_maxbits;  // page offset for key start
+ *         uint32_t _dead:1;           // set for deleted key
+ *         uint32_t _tod;              // timestamp of key insertion
+ *         uchar    _id[IdLength];     // id associated with key
+ *
+ *    When a key insertion determines that the gap between the highest
+ *    address slot and the lowest address key is too small to fit the
+ *    key to be inserted, then
+ *    
+ *        1. cleanPage is called to remove deleted keys, repacking the key heap to
+ *            reclaim space.  If there is still not enough space, then
+ *        2. splitPage is called to allocated a new right sibling page, and half the
+ *            keys are moved into the new page.
+ *        3. a new separator key is inserted into the parent node.
+ *
+ *    The recursion is controlled by passing a 'level' parameter. Insertion
+ *    at level = L, invokes insertion of a separator key at level = L+1.
+ *    Leaf nodes are at level 0.  When the level == rootLevel, it may be
+ *    necessary to split the root node.
+ *
+ */
+
     class Page;
 
-	struct Pool {
+    struct PoolEntry {
         PageNo _basePage;       // mapped base page number
         char*  _map;            // mapped memory pointer
-        ushort _slot;           // slot index in this array
+        ushort _slot;           // slot index of this pool entry then segment pool hash table
         ushort _pin;            // mapped page pin counter
         void*  _hashPrev;       // previous pool entry for the same hash index
         void*  _hashNext;       // next pool entry for the same hash index
     };
-	
+    
     /**
     */
-	class BufferMgr {
+    class BufferMgr {
     public:
 
         /**
@@ -95,85 +209,85 @@ namespace mongo {
         /**
         *  Release resources, deallocate.
         */
-	    void close( const char* thread );
+        void close( const char* thread );
 
         /**
-		*  Find segment in pool: must be called with hashslot hashIndex locked.
+        *  Find segment in pool: must be called with hashslot hashIndex locked.
         *  @param pageNo  -  
         *  @param hashIndex  -  
-		*  @return node, otherwise NULL if not there
+        *  @return node, otherwise NULL if not there
         */
-		Pool* findPool( PageNo pageNo, uint hashIndex, const char* thread );
-		
+        PoolEntry* findPoolEntry( PageNo pageNo, uint hashIndex, const char* thread );
+        
         /**
-		*  Add segment to hash table.
+        *  Add segment to hash table.
         *  @param pool  -  
         *  @param pageNo  -  
         *  @param hashIndex  -  
         */
-		void linkHash( Pool* pool, PageNo pageNo, int hashIndex, const char* thread );
-		
+        void linkHash( PoolEntry* pool, PageNo pageNo, int hashIndex, const char* thread );
+        
         /**
-		*  Map new buffer pool segment to virtual memory.
+        *  Map new buffer pool segment to virtual memory.
         *  @param pool  -  
         *  @param pageNo  -    
         *  @return OK if successful, otherwise error
         */
-		BLTERR mapSegment( Pool* pool, PageNo pageNo, const char* thread );
-		
+        BLTERR mapSegment( PoolEntry* pool, PageNo pageNo, const char* thread );
+        
         /**
-		*  Calculate page within pool.
+        *  Calculate page within pool.
         *  @param pool  -  
         *  @param pageNo  -  
         *  @return pointer to page in pool for given pageNo
         */
-		Page* page( Pool* pool, PageNo pageNo, const char* thread );
-		
+        Page* page( PoolEntry* pool, PageNo pageNo, const char* thread );
+        
         /**
-		*  Release pool pin.
+        *  Release pool pin.
         *  @param pool  -  
         */
-		void unpinPool( Pool* pool, const char* thread );
-		
+        void unpinPoolEntry( PoolEntry* pool, const char* thread );
+        
         /**
-		*  Find or place requested page in segment pool.
+        *  Find or place requested page in segment pool.
         *  @param pageNo  -  
-		*  @return pool table entry, incrementing pin
+        *  @return pool table entry, incrementing pin
         */
-		Pool* pinPool( PageNo pageNo, const char* thread );
-		
+        PoolEntry* pinPoolEntry( PageNo pageNo, const char* thread );
+        
         /**
-		*  Place write, read, or parent lock on requested page.
+        *  Place write, read, or parent lock on requested page.
         *  @param lockMode  -  
         *  @param set  -  
         */
-		void lockPage( LockMode lockMode, LatchSet* set, const char* thread );
-		
+        void lockPage( LockMode lockMode, LatchSet* set, const char* thread );
+        
         /**
-		*  Remove write, read, or parent lock on requested page.
+        *  Remove write, read, or parent lock on requested page.
         *  @param lockMode  -  
         *  @param set  -  
         */
-		void unlockPage( LockMode lockMode, LatchSet* set, const char* thread );
-		
+        void unlockPage( LockMode lockMode, LatchSet* set, const char* thread );
+        
         /**
-		*  Allocate a new page and write given page into it.
+        *  Allocate a new page and write given page into it.
         *  @param page  -  
         *  @return page id of new page
         */
-		PageNo newPage( Page* page, const char* thread );
-		
+        PageNo newPage( Page* page, const char* thread );
+        
         /**
-		*  Find slot in page for given key at a given level.
+        *  Find slot in page for given key at a given level.
         *  @param set  -  
         *  @param key  -  
         *  @param keylen  -  
         */
-		int findSlot( PageSet* set, const uchar* key, uint keylen, const char* thread );
-		
+        int findSlot( PageSet* set, const uchar* key, uint keylen, const char* thread );
+        
         /**
-		*  Find and load page at given level for given key:
-		*    leave page read or write locked as requested.
+        *  Find and load page at given level for given key:
+        *    leave page read or write locked as requested.
         *  @param set       - output: page set 
         *  @param key       - input: key within page  
         *  @param keylen    - input: length of key within page
@@ -182,13 +296,13 @@ namespace mongo {
         *  @param thread    - input: current thread
         *  @return 
         */
-		int loadPage( PageSet* set, const uchar* key, uint keylen, uint level, LockMode lockMode, const char* thread );
-		
+        int loadPage( PageSet* set, const uchar* key, uint keylen, uint level, LockMode lockMode, const char* thread );
+        
         /**
-		*  Return page to free list: page must be delete and write locked.
+        *  Return page to free list: page must be delete and write locked.
         *  @param set  -  
         */
-		void freePage( PageSet* set, const char* thread );
+        void freePage( PageSet* set, const char* thread );
 
         /**
         *
@@ -220,45 +334,52 @@ namespace mongo {
         uint getPageBits() const { return _pageBits; }
         uint getSegBits() const { return _segBits; }
         int  getFD() const { return _fd; }
-	    LatchMgr* getLatchMgr() const { return _latchMgr; }
+        LatchMgr* getLatchMgr() const { return _latchMgr; }
 
     protected:
-	    uint _pageSize;             // page size    
-	    uint _pageBits;             // page size in bits    
-	    uint _segBits;              // seg size in pages in bits
-	    int  _fd;                   // file descriptor
-	    ushort _poolCnt;            // highest page pool node in use
-	    ushort _poolMax;            // highest page pool node allocated
-	    ushort _poolMask;           // total number of pages in mmap segment - 1
-	    ushort _hashSize;           // size of Hash Table for pool entries
-	    volatile uint _evicted;     // last evicted hash table slot
+        uint _pageSize;             // page size    
+        uint _pageBits;             // page size in bits    
+        uint _segBits;              // seg size in pages in bits
+        int  _fd;                   // file descriptor
+        ushort _poolCnt;            // highest page pool node in use
+        ushort _poolMax;            // highest page pool node allocated
+        ushort _poolMask;           // total number of pages in mmap segment - 1
+        ushort _hashSize;           // size of Hash Table for pool entries
+        volatile uint _evicted;     // last evicted hash table slot
 
         /*
         *  _hashSize contiguosly allocated ushort
         *  _hash[ hashIndex ] => slot,
-        *  _pool[ slot ] => Pool
+        *  _pool[ slot ] => PoolEntry
         */
-	    ushort* _hash;
+        ushort* _hash;
 
         /*
         *  _hashSize contiguously allocated SpinLatch objects
         *  _latch[ hashIndex ] => pointer to latch for _hash[ hashIndex ]
         */
-	    SpinLatch* _latch;
+        SpinLatch* _latch;
 
         /*
         *  mapped latch page from allocation page
         */
-	    LatchMgr* _latchMgr;
+        LatchMgr* _latchMgr;
 
         /*
-        *  _poolMax contiguously allocated Pool objects (segments)
+        *  _poolMax contiguously allocated PoolEntry objects (segments)
         */
-	    Pool* _pool;
+        PoolEntry* _pool;
 
-	    Page* _zero;                // page frame for zeroes at end of file
-        int _err;                   // most recent error
-	};
+        /*
+         *  Page of zeros allocated once for efficiency
+         */
+        Page* _zero;
+
+        /*
+         *  Most recent error.
+         */
+        int _err;
+    };
 
 }   // namespace mongo
 

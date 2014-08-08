@@ -150,7 +150,7 @@ namespace mongo {
         //     poolMask == 0111 (base 2), and 3 == segBits != segSize.
     
         mgr->_hashSize = hashSize;
-        mgr->_pool  = (Pool*)calloc( poolMax, sizeof(Pool) );               // zero init
+        mgr->_pool  = (PoolEntry*)calloc( poolMax, sizeof(PoolEntry) );               // zero init
         mgr->_hash  = (ushort*)calloc( hashSize, sizeof(ushort) );          //  "    "
         mgr->_latch = (SpinLatch*)calloc( hashSize, sizeof(SpinLatch) );    //  "    "
 
@@ -275,7 +275,7 @@ namespace mongo {
         // release mapped pages. note: slot zero is never used
         // 		slot 0 == NULL slot, slot 0 is vacant
         for (uint slot = 1; slot < _poolMax; ++slot) {
-            Pool* pool = &_pool[ slot ];
+            PoolEntry* pool = &_pool[ slot ];
             if (pool->_slot) {
                 munmap( pool->_map, (_poolMask+1) << _pageBits );
             }
@@ -293,18 +293,18 @@ namespace mongo {
     /**
     *  Find segment in pool
     */
-    Pool* BufferMgr::findPool( PageNo pageNo, uint hashIndex, const char* thread ) {
+    PoolEntry* BufferMgr::findPoolEntry( PageNo pageNo, uint hashIndex, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         // compute start of hash chain
         uint slot = _hash[ hashIndex ];
         if (!slot) return NULL;
 
-        Pool* pool = &_pool[ slot ];		// XX Pool -> rename --> Segment
+        PoolEntry* pool = &_pool[ slot ];		// XX PoolEntry -> rename --> Segment
         pageNo &= ~(_poolMask);
 
         while (pool->_basePage != pageNo) {
-            if ( (pool = (Pool *)pool->_hashNext) ) continue;
+            if ( (pool = (PoolEntry *)pool->_hashNext) ) continue;
             return NULL;
         }
         return pool;
@@ -313,7 +313,7 @@ namespace mongo {
     /**
     *  Add a segment to the hash table
     */
-	void BufferMgr::linkHash( Pool* pool, PageNo pageNo, int hashIndex, const char* thread ) {
+	void BufferMgr::linkHash( PoolEntry* pool, PageNo pageNo, int hashIndex, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != pool );
@@ -324,14 +324,14 @@ namespace mongo {
 	
 	    uint slot = _hash[ hashIndex ];
 	    if (slot) {
-	        Pool* node = &_pool[ slot ];
+	        PoolEntry* node = &_pool[ slot ];
 	        pool->_hashNext = node;
 	        node->_hashPrev = pool;
 	    }
 	    _hash[ hashIndex ] = pool->_slot;
 	}
 	
-	BLTERR BufferMgr::mapSegment( Pool* pool, PageNo pageNo, const char* thread ) {
+	BLTERR BufferMgr::mapSegment( PoolEntry* pool, PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         // ex. ( 0..31 & ~31) << 15 => 0
@@ -352,7 +352,7 @@ namespace mongo {
 	    return BLTERR_ok;
 	}
 
-	Page* BufferMgr::page( Pool* pool, PageNo pageNo, const char* thread ) {
+	Page* BufferMgr::page( PoolEntry* pool, PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
         assert( NULL != pool );
@@ -362,13 +362,13 @@ namespace mongo {
 	}
 
 
-	void BufferMgr::unpinPool( Pool *pool, const char* thread ) {
+	void BufferMgr::unpinPoolEntry( PoolEntry *pool, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 	    __sync_fetch_and_add( &pool->_pin, -1 );
         assert( NULL != pool );
 	}
 	
-	Pool* BufferMgr::pinPool( PageNo pageNo, const char* thread ) {
+	PoolEntry* BufferMgr::pinPoolEntry( PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
 	    // lock hash table chain
@@ -380,7 +380,7 @@ namespace mongo {
         }
 	
 	    // look up in hash table
-	    Pool* pool = findPool( pageNo, hashIndex, thread );
+	    PoolEntry* pool = findPoolEntry( pageNo, hashIndex, thread );
 	    if (pool) {
 	        __sync_fetch_and_or( &pool->_pin, CLOCK_bit);		// XX -> check this for thread safety
 	        __sync_fetch_and_add( &pool->_pin, 1);
@@ -428,18 +428,18 @@ namespace mongo {
 	        }
 	
 	        // unlink victim pool node from hash table
-            Pool* node;
-	        if ( (node = (Pool *)pool->_hashPrev) ) {
+            PoolEntry* node;
+	        if ( (node = (PoolEntry *)pool->_hashPrev) ) {
 	            node->_hashNext = pool->_hashNext;
             }
-	        else if( (node = (Pool *)pool->_hashNext) ) {
+	        else if( (node = (PoolEntry *)pool->_hashNext) ) {
 	            _hash[i] = node->_slot;
             }
 	        else {
 	            _hash[i] = 0;
             }
 	
-	        if ( (node = (Pool *)pool->_hashNext) ) {
+	        if ( (node = (PoolEntry *)pool->_hashNext) ) {
 	            node->_hashPrev = pool->_hashPrev;
             }
 	
@@ -565,7 +565,7 @@ namespace mongo {
         PageNo newPage = Page::getPageNo( _latchMgr->_alloc[1]._right );
 
         if (newPage) {
-            if ( (set->_pool = pinPool( newPage, thread )) ) {
+            if ( (set->_pool = pinPoolEntry( newPage, thread )) ) {
                 set->_page = page( set->_pool, newPage, thread );
             }
             else {
@@ -573,7 +573,7 @@ namespace mongo {
             }
     
             Page::putPageNo( _latchMgr->_alloc[1]._right, Page::getPageNo( set->_page->_right ) );
-            unpinPool( set->_pool, thread );
+            unpinPoolEntry( set->_pool, thread );
             reuse = 1;
         } else {
             newPage = Page::getPageNo( _latchMgr->_alloc->_right );
@@ -626,7 +626,7 @@ namespace mongo {
 
         LockMode prevMode;
         LatchSet* prevLatch;
-        Pool* prevPool;
+        PoolEntry* prevPoolEntry;
 
         do {
             // determine lock mode of drill level: LockRead until we find our level
@@ -636,11 +636,11 @@ namespace mongo {
             set->_pageNo = pageNo;
 
             // pin page contents
-            if ( (set->_pool = pinPool( pageNo, thread )) ) {
+            if ( (set->_pool = pinPoolEntry( pageNo, thread )) ) {
                 set->_page = page( set->_pool, pageNo, thread );
             }
             else {
-                __OSS__( "pinPool failed for page: " << pageNo );
+                __OSS__( "pinPoolEntry failed for page: " << pageNo );
                 Logger::logError( thread, __ss__, __LOC__ );
                 return 0;
             }
@@ -654,7 +654,7 @@ namespace mongo {
             if (prevPageNo) {
                 unlockPage( prevMode, prevLatch, thread );
                 _latchMgr->unpinLatch( prevLatch, thread );
-                unpinPool( prevPool, thread );
+                unpinPoolEntry( prevPoolEntry, thread );
                 prevPageNo = 0;
             }
 
@@ -688,14 +688,14 @@ namespace mongo {
                 if (inputMode != LockRead && drill == level) {
                     unlockPage( lockMode, set->_latch, thread );
                     _latchMgr->unpinLatch( set->_latch, thread );
-                    unpinPool( set->_pool, thread );
+                    unpinPoolEntry( set->_pool, thread );
                     continue;
                 }
             }
 
             prevPageNo = set->_pageNo;
             prevLatch  = set->_latch;
-            prevPool   = set->_pool;
+            prevPoolEntry   = set->_pool;
             prevMode   = lockMode;
 
             // find key on page at this level, descend to requested level
@@ -845,7 +845,7 @@ slideright: //  or slide right into next page
         unlockPage( LockDelete, set->_latch, thread );
         unlockPage( LockWrite, set->_latch, thread );
         _latchMgr->unpinLatch( set->_latch, thread );
-        unpinPool( set->_pool, thread );
+        unpinPoolEntry( set->_pool, thread );
 
         // unlock allocation page
         SpinLatch::spinReleaseWrite( _latchMgr->_lock, thread );
