@@ -6,7 +6,7 @@
 #    http://arxiv.org/ftp/arxiv/papers/1009/1009.2764.pdf
 #    https://code.google.com/p/high-concurrency-btree/
 #
-#  The [KM] code is based on research published by Ibrahim Jaluta ([IJ]):
+#  The [KM] code makes reference to research published by Ibrahim Jaluta ([IJ]):
 #
 #    "B-tree Concurrency Control and Recovery in a Client-Server Database
 #    Management System", Dissertation for the degree of Doctor of Science
