@@ -1,9 +1,23 @@
 #
-# The B-LInk tree code is based on research published by Kark Malbrain.
-# The code is derived and re-written from original 'C' source code placed
-# in the public domain by Karl Malbrain.
-# See: http://arxiv.org/ftp/arxiv/papers/1009/1009.2764.pdf
-# See: https://code.google.com/p/high-concurrency-btree/
+#  This B-Link tree code is based on research published by Kark Malbrain ([KM]).
+#  The code is derived and re-written from original 'C' source code placed
+#  in the public domain by Karl Malbrain.  See:
+#
+#    http://arxiv.org/ftp/arxiv/papers/1009/1009.2764.pdf
+#    https://code.google.com/p/high-concurrency-btree/
+#
+#  The [KM] code is based on research published by Ibrahim Jaluta ([IJ]):
+#
+#    "B-tree Concurrency Control and Recovery in a Client-Server Database
+#    Management System", Dissertation for the degree of Doctor of Science
+#    in Technology, Helsinki University (2002).
+#
+#  The original proposal for B-Link trees is due to Lehman and Yao ([LY]):
+#
+#    "Efficient locking for concurrent operations in B-trees", ACM Transactions
+#    Database Systems 6 (1981).
+#
+#  See the bibliography of [IJ] for numerous additional useful references.
 
 # compile everything
 g++ -O3 -o random_keys random_keys.cpp
