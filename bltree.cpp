@@ -51,7 +51,6 @@
 #include "bufmgr.h"
 #include "page.h"
 
-#include <assert.h>
 #include <iostream>
 #include <pthread.h>
 #include <stddef.h>
@@ -558,8 +557,8 @@ namespace mongo {
         uint nxt = _mgr->getPageSize();
         uint level = set->_page->_level;
 
-        BLTKey* key;
-    
+        BLTKey* key = NULL;
+   
         while (cnt++ < max) {
             key = Page::keyptr(set->_page, cnt);
             nxt -= key->_len + 1;
@@ -576,8 +575,14 @@ namespace mongo {
         }
     
         // remember existing fence key for new page to the right
-        memcpy( rightKey, key, key->_len + 1 );
+		if (key) {
+        	memcpy( rightKey, key, key->_len + 1 );
+		}
+		else {
+			return BLTERR_struct;
+		}
     
+        assert( NULL != _frame );
         _frame->_bits = _mgr->getPageBits();
         _frame->_min = nxt;
         _frame->_cnt = idx;
@@ -891,7 +896,7 @@ namespace mongo {
             }
         }
     
-        for (ushort hashidx = 0; hashidx < _mgr->getLatchMgr()->_latchHash; hashidx++ ) {
+        for (ushort hashidx = 0; hashidx < _mgr->getLatchMgr()->_latchHashSize; hashidx++ ) {
             if (*(uint *)(_mgr->getLatchMgr()->_table[hashidx]._latch) ) {
                 __OSS__( "hash entry " << hashidx << " locked" );
                 Logger::logDebug( _thread, __ss__, __LOC__ );

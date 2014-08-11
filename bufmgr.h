@@ -261,14 +261,14 @@ namespace mongo {
         *  @param lockMode  -  
         *  @param set  -  
         */
-        void lockPage( LockMode lockMode, LatchSet* set, const char* thread );
+        void lockPage( BLTLockMode lockMode, LatchSet* set, const char* thread );
         
         /**
         *  Remove write, read, or parent lock on requested page.
         *  @param lockMode  -  
         *  @param set  -  
         */
-        void unlockPage( LockMode lockMode, LatchSet* set, const char* thread );
+        void unlockPage( BLTLockMode lockMode, LatchSet* set, const char* thread );
         
         /**
         *  Allocate a new page and write given page into it.
@@ -296,7 +296,7 @@ namespace mongo {
         *  @param thread    - input: current thread
         *  @return 
         */
-        int loadPage( PageSet* set, const uchar* key, uint keylen, uint level, LockMode lockMode, const char* thread );
+        int loadPage( PageSet* set, const uchar* key, uint keylen, uint level, BLTLockMode lockMode, const char* thread );
         
         /**
         *  Return page to free list: page must be delete and write locked.
@@ -344,11 +344,12 @@ namespace mongo {
         ushort _poolCnt;            // highest page pool node in use
         ushort _poolMax;            // highest page pool node allocated
         ushort _poolMask;           // total number of pages in mmap segment - 1
-        ushort _hashSize;           // size of Hash Table for pool entries
+        ushort _hashSize;           // size of hash table for pool entries
         volatile uint _evicted;     // last evicted hash table slot
+        int _err;					// most recent error
 
         /*
-        *  _hashSize contiguosly allocated ushort
+        *  _hashSize contiguously allocated ushort
         *  _hash[ hashIndex ] => slot,
         *  _pool[ slot ] => PoolEntry
         */
@@ -375,10 +376,6 @@ namespace mongo {
          */
         Page* _zero;
 
-        /*
-         *  Most recent error.
-         */
-        int _err;
     };
 
 }   // namespace mongo

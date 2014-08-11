@@ -151,7 +151,7 @@ namespace mongo {
             "\n  dirty bit = " << (bool)page._dirty <<
             "\n]\n";
 
-        for (int slot = 1; slot <= page._cnt; ++slot) {
+        for (uint slot = 1; slot <= page._cnt; ++slot) {
             Slot* slotPtr = Page::slotptr( (Page*)&page, slot );
             BLTKey* keyPtr = Page::keyptr( (Page*)&page, slot );
             os << *slotPtr << " : "

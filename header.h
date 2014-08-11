@@ -1,4 +1,4 @@
-//@file xxx
+//@file bltree.h
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -26,16 +26,4 @@
 *    exception statement from all source files in the program, then also delete
 *    it in the license file.
 */
-
-#include "xxx.h"
-
-#include <string>
-#include <iostream>
-    
-using namespace std;
-using namespace mongo;
-
-namespace mongo {
-
-}   // namespace mongo
 

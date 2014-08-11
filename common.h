@@ -52,17 +52,17 @@ namespace mongo {
     #define MMAP_MIN_SIZE   4096
 
     // packed PageNo size
-    #define IdLength        6                   // packed page number size
+    #define IdLength        8                   // packed page number size
 
     // packed DocId size
-    #define DocIdLength     6                   // packed docid size
+    #define DocIdLength     8                   // packed docid size
 
     // page size parameters
-    #define BLT_minbits     9                   // minimum page size in bits = lg(512)
+    #define BLT_minbits     12                  // minimum page size in bits = lg(4K)
     #define BLT_maxbits     24                  // maximum page size in bits = lg(16M)
-    #define BLT_minpage     (1<<BLT_minbits)    // minimum page size = 512
+    #define BLT_minpage     (1<<BLT_minbits)    // minimum page size = 4K
     #define BLT_maxpage     (1<<BLT_maxbits)    // maximum page size = 16MB
-    #define BLT_latchtable  128                 // number of latch manager slots <-- XX contemplate increasing for more threads
+    #define BLT_latchtableSize  1024            // number of latch manager slots (may need more)
 
     // file open modes
     #define BLT_ro          0x6f72              // read-only

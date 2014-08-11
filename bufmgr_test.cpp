@@ -31,9 +31,11 @@
 #include "common.h"
 #include "logger.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <iostream>
 #include <sstream>
+#include <stdlib.h>
 #include <string>
 #include <string.h>
     

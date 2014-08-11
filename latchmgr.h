@@ -90,7 +90,7 @@ namespace mongo {
 	    LockRead,
 	    LockWrite,
 	    LockParent
-	} LockMode;
+	} BLTLockMode;
 	
 	class SpinLatch {
     public:
@@ -162,7 +162,7 @@ namespace mongo {
 	    ushort _latchDeployed;      // highest number of latch entries deployed
 	    ushort _nlatchPage;         // number of latch pages at BT_latch
 	    ushort _latchTotal;         // number of page latch entries
-	    ushort _latchHash;          // number of latch hash table slots
+	    ushort _latchHashSize;      // number of latch hash table slots
 	    ushort _latchVictim;        // next latch entry to examine
 	    LatchSet* _latchSets;       // mapped latch set from latch pages
 	    HashEntry _table[0];        // the hash table, a map : pageNo --> LatchSet

@@ -62,6 +62,7 @@ namespace mongo {
     // SpinLatch
 
     #define LATCH_TRACE     false
+	#define SPIN_LIMIT		500000
 
     /**
     *  wait until write lock mode is clear,
@@ -73,6 +74,14 @@ namespace mongo {
         assert( NULL != latch );
 
         ushort prev;
+		uint backoffCount = 0;
+		/*
+		uint count = 0;
+
+		struct timespec spec;
+		spec.tv_sec = 0;
+        spec.tv_nsec = random() % 1024;
+		*/
         
         do {
             // obtain latch mutex
@@ -80,15 +89,26 @@ namespace mongo {
                 continue;
             }
 
+			/*
+			if (count++ > SPIN_LIMIT) {
+				count = 0;
+				nanosleep( &spec, NULL );
+				spec.tv_nsec <<= 1;
+				backoffCount++;
+			}
+			*/
+
             // see if exclusive request is granted or pending
             if ( (prev = !(latch->_exclusive | latch->_pending)) ) {
                 latch->_share++;
             }
 
             *latch->_mutex = 0;
-            if (prev) { return 0; }
+            if (prev) { return backoffCount; }
 
         } while (sched_yield(), 1);
+
+		return backoffCount;
     }
  
     /**
@@ -100,11 +120,29 @@ namespace mongo {
         assert( NULL != latch );
 
         ushort prev;
+		uint backoffCount = 0;
+		/*
+		uint count = 0;
+
+		struct timespec spec;
+		spec.tv_sec = 0;
+        spec.tv_nsec = random() % 1024;
+		*/
+        
 
         do {
             if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
             }
+
+			/*
+			if (count++ > SPIN_LIMIT) {
+				count = 0;
+				nanosleep( &spec, NULL );
+				spec.tv_nsec <<= 1;
+				backoffCount++;
+			}
+			*/
 
             // see if shared or exclusive request is granted 
             if ((prev = !(latch->_share | latch->_exclusive))) {
@@ -115,9 +153,11 @@ namespace mongo {
                 latch->_pending = 1;
             }
             *latch->_mutex = 0;
-            if (prev) { return 0; }
+            if (prev) { return backoffCount; }
 
         } while (sched_yield(), 1);
+
+		return backoffCount;
     }
  
     /**
@@ -241,7 +281,7 @@ namespace mongo {
     LatchSet* LatchMgr::pinLatch( PageNo pageNo, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        ushort hashIndex = pageNo % _latchHash;
+        ushort hashIndex = pageNo % _latchHashSize;
         ushort slot;
         ushort avail = 0;
         LatchSet* set;
