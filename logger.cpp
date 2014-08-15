@@ -27,9 +27,16 @@
 *    it in the license file.
 */
 
+#ifndef STANDALONE
+#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/util/assert_util.h"
+#else
 #include "logger.h"
-
+#include "common.h"
 #include <assert.h>
+#endif
+
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -55,13 +62,13 @@ namespace mongo {
     void Logger::logMsg( const std::string& label, const char* msg ) {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
-        assert( it != logv.end() );
+        uassert( -1, "it == logv.end()", it != logv.end() );
         *(it->second) << label << ':' << msg << std::endl;
     }
 
     void Logger::logMsg( const std::string& label, const std::string& msg ) {
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
-        assert( it != logv.end() );
+        uassert( -1, "it == logv.end()", it != logv.end() );
         *(it->second) << label << ':' << msg << std::endl;
     }
 
@@ -69,7 +76,7 @@ namespace mongo {
                             const char* file, const char* func, uint32_t line ) {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
-        assert( it != logv.end() );
+        uassert( -1, "it == logv.end()", it != logv.end() );
         *(it->second) << label << ':' << "Info [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 
@@ -82,7 +89,7 @@ namespace mongo {
                             const char* file, const char* func, uint32_t line ) {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
-        assert( it != logv.end() );
+        uassert( -1, "it == logv.end()", it != logv.end() );
         *(it->second) << label << ':' << "Debug [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 
@@ -95,7 +102,7 @@ namespace mongo {
                             const char* file, const char* func, uint32_t line ) {
         if (NULL == msg) return;
         std::map< std::string, std::ostream* >::iterator it = logv.find( label );
-        assert( it != logv.end() );
+        uassert( -1, "it == logv.end()", it != logv.end() );
         *(it->second) << label << ':' << "Error [" << file<<':'<<func<<':'<<line << "]: " << msg << std::endl;
     }
 

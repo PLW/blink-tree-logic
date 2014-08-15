@@ -48,6 +48,10 @@ namespace mongo {
     #define _LARGEFILE64_SOURCE 
 #endif
 
+#ifdef STANDALONE
+	#define uassert( X, Y, Z ) assert( Z )
+#endif
+
     // default mmap alignment
     #define MMAP_MIN_SIZE   4096
 

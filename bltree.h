@@ -46,18 +46,17 @@
 
 #pragma once
 
+#ifndef STANDALONE
+#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltkey.h"
+#include "mongo/db/storage/mmap_v1/bltree/page.h"
+#else
 #include "common.h"
 #include "blterr.h"
 #include "bltkey.h"
 #include "page.h"
-
-#include <assert.h>
-#include <fcntl.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
+#endif
 
 namespace mongo {
     /**

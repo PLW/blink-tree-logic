@@ -85,11 +85,11 @@ namespace mongo {
     */
 
 	typedef enum {
-	    LockAccess,
-	    LockDelete,
-	    LockRead,
-	    LockWrite,
-	    LockParent
+	    LockAccess  = 0,
+	    LockDelete  = 1,
+	    LockRead    = 2,
+	    LockWrite   = 3,
+	    LockParent  = 4
 	} BLTLockMode;
 	
 	class SpinLatch {

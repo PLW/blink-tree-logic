@@ -44,19 +44,33 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
+#ifndef STANDALONE
+#include "mongo/platform/basic.h"
+#include "mongo/util/assert_util.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltree.h"
+#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/mmap_v1/bltree/latchmgr.h"
+#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#include "mongo/db/storage/mmap_v1/bltree/bufmgr.h"
+#include "mongo/db/storage/mmap_v1/bltree/page.h"
+#else
 #include "bltree.h"
 #include "common.h"
 #include "latchmgr.h"
 #include "logger.h"
 #include "bufmgr.h"
 #include "page.h"
+#include <assert.h>
+#endif
 
+#include <fcntl.h>
 #include <iostream>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <sstream>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -137,8 +151,8 @@ namespace mongo {
     BLTree* BLTree::create( BufferMgr* mgr, const char* thread ) {
         if (BLTINDEX_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != mgr );
-        assert( NULL != thread );
+        uassert( -1, "NULL == mgr", NULL != mgr );
+        uassert( -1, "NULL == thread", NULL != thread );
 
         BLTree* blt = new BLTree();
         memset( blt, 0, sizeof(*blt) );
@@ -162,7 +176,7 @@ namespace mongo {
     BLTERR BLTree::fixFenceKey( PageSet* set, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != set );
+        uassert( -1, "NULL == set", NULL != set );
 
         uchar leftKey[256];
         uchar rightKey[256];
@@ -206,7 +220,7 @@ namespace mongo {
     BLTERR BLTree::collapseRoot( PageSet* root ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != root );
+        uassert( -1, "NULL == root", NULL != root );
 
         PageSet child[1];
     
@@ -257,7 +271,7 @@ namespace mongo {
     BLTERR BLTree::deleteKey( const uchar* inputKey, uint inputKeyLen, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != inputKey );
+        uassert( -1, "NULL == inputKey", NULL != inputKey );
 
         uchar lowerFence[256];
         uchar higherFence[256];
@@ -394,7 +408,7 @@ namespace mongo {
     DocId BLTree::findKey( const uchar* inputKey, uint inputKeyLen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != inputKey );
+        uassert( -1, "NULL == inputKey", NULL != inputKey );
 
         PageSet set[1];
         DocId id = 0;
@@ -405,6 +419,7 @@ namespace mongo {
             key = Page::keyptr( set->_page, slot );
         }
         else {
+			Logger::logDebug( _thread, "loadPage failed", __LOC__ );
             return 0;
         }
     
@@ -413,6 +428,9 @@ namespace mongo {
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
                 id = Page::getDocId( Page::slotptr( set->_page, slot )->_id );
             }
+			else {
+				Logger::logDebug( _thread, "keycmp failed", __LOC__ );
+			}
         }
     
         _mgr->unlockPage( LockRead, set->_latch, _thread );
@@ -428,7 +446,7 @@ namespace mongo {
     uint BLTree::cleanPage( Page* page, uint amt, uint slot ) {	// XX fix: amt -> inputKeyLen
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != page );
+        uassert( -1, "NULL == page", NULL != page );
 
         uint nxt = _mgr->getPageSize();
         uint idx = 0;
@@ -488,8 +506,8 @@ namespace mongo {
     BLTERR BLTree::splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo2) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != root );
-        assert( NULL != leftKey );
+        uassert( -1, "NULL == root", NULL != root );
+        uassert( -1, "NULL == leftKey", NULL != leftKey );
 
         uint nxt = _mgr->getPageSize();
         PageNo left;
@@ -543,7 +561,7 @@ namespace mongo {
     BLTERR BLTree::splitPage( PageSet* set ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != set );
+        uassert( -1, "NULL == set", NULL != set );
 
         uchar fenceKey[256];
         uchar rightKey[256];
@@ -582,7 +600,8 @@ namespace mongo {
 			return BLTERR_struct;
 		}
     
-        assert( NULL != _frame );
+        uassert( -1, "NULL == _frame", NULL != _frame );
+
         _frame->_bits = _mgr->getPageBits();
         _frame->_min = nxt;
         _frame->_cnt = idx;
@@ -610,7 +629,9 @@ namespace mongo {
         // assemble page of smaller keys
         while (cnt++ < max / 2) {
             key = Page::keyptr(_frame, cnt);
-            assert( NULL != key );
+
+            uassert( -1, "NULL == key", NULL != key );
+
             nxt -= key->_len + 1;
 
             memcpy( (uchar *)set->_page + nxt, key, key->_len + 1 );
@@ -670,7 +691,7 @@ namespace mongo {
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != inputKey );
+        uassert( -1, "NULL == inputKey", NULL != inputKey );
 
         PageSet set[1];
         uint slot;
@@ -694,7 +715,7 @@ namespace mongo {
                 return _err;
             }
 
-            assert( NULL != key );
+            uassert( -1, "NULL == key", NULL != key );
     
             if (INSERT_TRACE) {
                 __OSS__( "key = " << key->toString() );
@@ -781,7 +802,7 @@ namespace mongo {
     uint BLTree::startKey( const uchar* key, uint keylen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        assert( NULL != key );
+        uassert( -1, "NULL == key", NULL != key );
 
         PageSet set[1];
     

@@ -296,8 +296,20 @@ namespace mongo {
         *  @param thread    - input: current thread
         *  @return 
         */
-        int loadPage( PageSet* set, const uchar* key, uint keylen, uint level, BLTLockMode lockMode, const char* thread );
+        int loadPage( PageSet* set,
+                      const uchar* key,
+                      uint keylen,
+                      uint level,
+                      BLTLockMode lockMode,
+                      const char* thread );
         
+        /**
+        *  unlock a PageSet
+        */
+        void unlockPageSet( PageSet* set,
+                            BLTLockMode lockMode,
+                            const char* thread );
+
         /**
         *  Return page to free list: page must be delete and write locked.
         *  @param set  -  
@@ -346,7 +358,7 @@ namespace mongo {
         ushort _poolMask;           // total number of pages in mmap segment - 1
         ushort _hashSize;           // size of hash table for pool entries
         volatile uint _evicted;     // last evicted hash table slot
-        int _err;					// most recent error
+        int _err;                    // most recent error
 
         /*
         *  _hashSize contiguously allocated ushort

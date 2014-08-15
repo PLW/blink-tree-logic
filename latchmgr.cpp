@@ -44,12 +44,21 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
+#ifndef STANDALONE
+#include "mongo/platform/basic.h"
+#include "mongo/util/assert_util.h"
+#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/mmap_v1/bltree/latchmgr.h"
+#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
+#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#else
 #include "common.h"
 #include "latchmgr.h"
 #include "blterr.h"
 #include "logger.h"
-
 #include <assert.h>
+#endif
+
 #include <stdlib.h>
 #include <sstream>
 #include <time.h>
@@ -62,7 +71,7 @@ namespace mongo {
     // SpinLatch
 
     #define LATCH_TRACE     false
-	#define SPIN_LIMIT		500000
+	#define SPIN_LIMIT		200000
 
     /**
     *  wait until write lock mode is clear,
@@ -71,32 +80,22 @@ namespace mongo {
     uint SpinLatch::spinReadLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != latch );
+		uassert( -1, "NULL == latch", NULL != latch );
 
         ushort prev;
-		uint backoffCount = 0;
-		/*
 		uint count = 0;
-
-		struct timespec spec;
-		spec.tv_sec = 0;
-        spec.tv_nsec = random() % 1024;
-		*/
+		uint backoffCount = 0;
         
         do {
+			if (++count > SPIN_LIMIT) {
+				count = 0;
+				++backoffCount;
+			}
+
             // obtain latch mutex
             if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
             }
-
-			/*
-			if (count++ > SPIN_LIMIT) {
-				count = 0;
-				nanosleep( &spec, NULL );
-				spec.tv_nsec <<= 1;
-				backoffCount++;
-			}
-			*/
 
             // see if exclusive request is granted or pending
             if ( (prev = !(latch->_exclusive | latch->_pending)) ) {
@@ -117,32 +116,22 @@ namespace mongo {
     uint SpinLatch::spinWriteLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != latch );
+		uassert( -1, "NULL == latch", NULL != latch );
 
         ushort prev;
-		uint backoffCount = 0;
-		/*
 		uint count = 0;
-
-		struct timespec spec;
-		spec.tv_sec = 0;
-        spec.tv_nsec = random() % 1024;
-		*/
-        
+		uint backoffCount = 0;
 
         do {
+			if (++count > SPIN_LIMIT) {
+				count = 0;
+				++backoffCount;
+			}
+
+            // obtain latch mutex
             if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
                 continue;
             }
-
-			/*
-			if (count++ > SPIN_LIMIT) {
-				count = 0;
-				nanosleep( &spec, NULL );
-				spec.tv_nsec <<= 1;
-				backoffCount++;
-			}
-			*/
 
             // see if shared or exclusive request is granted 
             if ((prev = !(latch->_share | latch->_exclusive))) {
@@ -167,7 +156,7 @@ namespace mongo {
     int SpinLatch::spinTryWrite( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != latch );
+		uassert( -1, "NULL == latch", NULL != latch );
 
         if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             return 0;
@@ -189,7 +178,7 @@ namespace mongo {
     void SpinLatch::spinReleaseWrite( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != latch );
+		uassert( -1, "NULL == latch", NULL != latch );
 
         while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             sched_yield();
@@ -204,7 +193,7 @@ namespace mongo {
     void SpinLatch::spinReleaseRead( SpinLatch* latch, const char* thread) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != latch );
+		uassert( -1, "NULL == latch", NULL != latch );
 
         while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
             sched_yield();
@@ -270,7 +259,7 @@ namespace mongo {
     */
     void LatchMgr::unpinLatch( LatchSet* set, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-        assert( NULL != set );
+		uassert( -1, "NULL == set", NULL != set );
         __sync_fetch_and_add( &set->_pin, -1 );
     }
 

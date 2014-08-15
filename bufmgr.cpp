@@ -44,15 +44,27 @@
 *    REDISTRIBUTION OF THIS SOFTWARE.
 */
 
+#ifndef STANDALONE
+#include "mongo/platform/basic.h"
+#include "mongo/util/assert_util.h"
+#include "mongo/db/storage/mmap_v1/bltree/bufmgr.h"
+#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltkey.h"
+#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/mmap_v1/bltree/latchmgr.h"
+#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#include "mongo/db/storage/mmap_v1/bltree/page.h"
+#else
+#include "bufmgr.h"
 #include "blterr.h"
 #include "bltkey.h"
-#include "bufmgr.h"
 #include "common.h"
 #include "latchmgr.h"
 #include "logger.h"
 #include "page.h"
-
 #include <assert.h>
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <memory.h>
@@ -72,7 +84,7 @@ namespace mongo {
     
         if (BUFMGR_TRACE) Logger::logDebug( "main", "", __LOC__ );
 
-        assert( NULL != name );
+		uassert( -1, "db name NULL", NULL != name );
 
         // determine sanity of page size and buffer pool
         uint bits = bits0;
@@ -305,7 +317,7 @@ namespace mongo {
 	void BufferMgr::linkHash( PoolEntry* pool, PageNo pageNo, int hashIndex, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != pool );
+		uassert( -1, "NULL == pool", NULL != pool );
 
 	    pool->_hashPrev = pool->_hashNext = NULL;
 	    pool->_basePage = pageNo & ~(_poolMask);
@@ -346,7 +358,7 @@ namespace mongo {
 	Page* BufferMgr::page( PoolEntry* pool, PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != pool );
+		uassert( -1, "NULL == pool", NULL != pool );
 
 	    uint subpage = (uint)(pageNo & _poolMask); // page within mapping
 	    return (Page*)(pool->_map + (subpage << _pageBits));
@@ -355,8 +367,10 @@ namespace mongo {
 
 	void BufferMgr::unpinPoolEntry( PoolEntry *pool, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
+
+		uassert( -1, "NULL == pool", NULL != pool );
+
 	    __sync_fetch_and_add( &pool->_pin, -1 );
-        assert( NULL != pool );
 	}
 	
 	PoolEntry* BufferMgr::pinPoolEntry( PageNo pageNo, const char* thread ) {
@@ -460,7 +474,7 @@ namespace mongo {
     void BufferMgr::lockPage( BLTLockMode lockMode, LatchSet* set, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != set );
+		uassert( -1, "NULL == set", NULL != set );
         uint n = 0;
 
         switch( lockMode ) {
@@ -508,7 +522,7 @@ namespace mongo {
     void BufferMgr::unlockPage( BLTLockMode lockMode, LatchSet* set, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != set );
+		uassert( -1, "NULL == set", NULL != set );
 
         switch (lockMode) {
         case LockRead:   {
@@ -540,7 +554,7 @@ namespace mongo {
     PageNo BufferMgr::newPage( Page* inputPage, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
     
-        assert( NULL != inputPage );
+		uassert( -1, "NULL == inputPage", NULL != inputPage );
 
         // lock allocation page
         uint n = 0;
@@ -572,6 +586,9 @@ namespace mongo {
             Page::putPageNo( _latchMgr->_alloc->_right, newPage+1 );
             reuse = 0;
         }
+
+        // unlock allocation latch
+        //SpinLatch::spinReleaseWrite( _latchMgr->_lock, thread );
 
         if (pwrite( _fd, inputPage, _pageSize, newPage << _pageBits) < _pageSize) {
             __OSS__( "write new page syserr: " << strerror(errno) );
@@ -610,8 +627,8 @@ namespace mongo {
     {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
     
-        assert( NULL != set );
-        assert( NULL != key );
+		uassert( -1, "NULL == set", NULL != set );
+		uassert( -1, "NULL == key", NULL != key );
 
         // start at root of btree and drill down
         PageNo pageNo     = ROOT_page;
@@ -720,7 +737,7 @@ namespace mongo {
                 }
             }
 
-slideright: //  or slide right into next page
+	slideright: //  or slide right into next page
             pageNo = Page::getPageNo( set->_page->_right );
 
         } while (pageNo);
@@ -736,8 +753,8 @@ slideright: //  or slide right into next page
     int BufferMgr::findSlot( PageSet *set, const uchar* key, uint keylen, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != set );
-        assert( NULL != key );
+		uassert( -1, "NULL == set", NULL != set );
+		uassert( -1, "NULL == key", NULL != key );
 
         uint diff;
         uint higher = set->_page->_cnt;
@@ -776,7 +793,7 @@ slideright: //  or slide right into next page
     int BufferMgr::readPage( Page* page, PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != page );
+		uassert( -1, "NULL == page", NULL != page );
         
         off_t off = (pageNo << _pageBits);
         uint32_t pageSize = (1 << _pageBits);
@@ -796,7 +813,7 @@ slideright: //  or slide right into next page
     int BufferMgr::writePage( Page* page, PageNo pageNo, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != page );
+		uassert( -1, "NULL == page", NULL != page );
 
         off_t off = (pageNo << _pageBits);
         uint32_t pageSize = (1 << _pageBits);
@@ -821,7 +838,7 @@ slideright: //  or slide right into next page
     void BufferMgr::freePage( PageSet* set, const char* thread ) {
         if (BUFMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
 
-        assert( NULL != set );
+		uassert( -1, "NULL == set", NULL != set );
 
         // lock allocation page
         uint n = 0;
