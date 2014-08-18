@@ -84,6 +84,7 @@ namespace mongo {
     /**
     *  Move PageNo into a dest array.
     */
+/*
     void Page::putPageNo( uchar* dest, PageNo pageNo ) {
         int i = IdLength;
         while (i--) {
@@ -91,10 +92,12 @@ namespace mongo {
             pageNo >>= 8;
         }
     }
+*/
     
     /**
     *  Extract PageNofrom byte array
     */
+/*
     PageNo Page::getPageNo( uchar* src ) {
         PageNo pageNo = 0;
         for (int i = 0; i < IdLength; ++i) {
@@ -103,10 +106,12 @@ namespace mongo {
         }
         return pageNo;
     }
+*/
     
     /**
     *  Move DocId into byte array
     */
+/*
     void Page::putDocId( uchar* dest, DocId docId ) {
         int i = DocIdLength;
         while (i--) {
@@ -114,10 +119,12 @@ namespace mongo {
             docId >>= 8;
         }
     }
+*/
     
     /**
     *  Extract Id bytes from a src array.
     */
+/*
     DocId Page::getDocId( uchar* src ) {
         DocId docId = 0;
         for (int i = 0; i < DocIdLength; ++i) {
@@ -126,8 +133,15 @@ namespace mongo {
         }
         return docId;
     }
+*/
     
     // debugging output
+
+    std::ostream& operator<<( std::ostream& os, const DiskLoc& loc ) {
+        return os <<
+            "DiskLoc[ fileno = " << std::setw(5) << loc.fileno <<
+                     ", offset = " << std::setw(15) << loc.offset << ']';
+    }
 
     std::ostream& operator<<( std::ostream& os, const Slot& slot ) {
         return os <<
@@ -135,7 +149,7 @@ namespace mongo {
             " offset = " << (uint32_t)slot._off <<
             ", dead bit = " << (bool)slot._dead <<
             ", timestamp = " << (uint32_t)slot._tod <<
-            ", id = " << std::setw(4) << Page::getPageNo( (uchar*)slot._id ) << ']';
+            ", id = " << slot._id << ']';
     }
 
     std::ostream& operator<<( std::ostream& os, const Page& page ) {
@@ -152,8 +166,9 @@ namespace mongo {
             "\n]\n";
 
         for (uint slot = 1; slot <= page._cnt; ++slot) {
-            Slot* slotPtr = Page::slotptr( (Page*)&page, slot );
+            Slot* slotPtr  = Page::slotptr( (Page*)&page, slot );
             BLTKey* keyPtr = Page::keyptr( (Page*)&page, slot );
+
             os << *slotPtr << " : "
                 << std::string( (const char*)keyPtr->_key, keyPtr->_len )
                 << std::endl;

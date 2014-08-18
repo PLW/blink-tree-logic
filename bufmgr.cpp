@@ -168,7 +168,8 @@ namespace mongo {
         uint latchSetsPerPage = pageSize / sizeof(LatchSet);
         uint nlatchPage = BLT_latchtableSize / latchSetsPerPage + 1; 	// round up
 
-        Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage );	// first free page
+        //Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage );	// first free page
+        latchMgr->_alloc->_right = MIN_level + 1 + nlatchPage;	// first free page
 
         latchMgr->_alloc->_bits = bits;
         latchMgr->_nlatchPage = nlatchPage;
@@ -197,8 +198,13 @@ namespace mongo {
 		// initialize root page and leaf page
         for (uint level = MIN_level; level--; ) {
             Page::slotptr(latchMgr->_alloc, 1)->_off = pageSize - 3;	// top 3 bytes are +infty key
-            Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,	// level==0 -> leaf, level==1 -> root, initially
-                            	level ? MIN_level - level + 1 : 0); 	// next docid, (e.g.) 2, then 0
+
+            //Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,	// lvl==0 >leaf,lvl==1->root
+            //                      level ? MIN_level - level + 1 : 0; 	// next docid, (e.g.) 2, then 0
+
+            Page::slotptr(latchMgr->_alloc, 1)->_id	                    // lvl==0->leaf,lvl==1->root
+                            = level ? MIN_level - level + 1 : 0; 	    // next docid, (e.g.) 2, then 0
+
             BLTKey* key = Page::keyptr(latchMgr->_alloc, 1);
             key->_len = 2;        	// create stopper key: +infty
             key->_key[0] = 0xff;
@@ -469,6 +475,21 @@ namespace mongo {
 	}
 
     /**
+    *  release latch pin
+    */
+    void BufferMgr::unpinLatch( LatchSet* set, const char* thread ) {
+        _latchMgr->unpinLatch( set, thread );
+    }
+
+    /**
+    *  find existing latchset or create new one
+    *  return with latchset pinned
+    */
+    LatchSet* BufferMgr::pinLatch( PageNo pageNo, const char* thread ) {
+        return _latchMgr->pinLatch( pageNo, thread );
+    }
+
+    /**
     *  place write, read, or parent lock on requested page
     */
     void BufferMgr::lockPage( BLTLockMode lockMode, LatchSet* set, const char* thread ) {
@@ -567,7 +588,8 @@ namespace mongo {
         PageSet set[1];
         int reuse;
 
-        PageNo newPage = Page::getPageNo( _latchMgr->_alloc[1]._right );
+        //PageNo newPage = Page::getPageNo( _latchMgr->_alloc[1]._right );
+        PageNo newPage = _latchMgr->_alloc[1]._right;
 
         if (newPage) {
             if ( (set->_pool = pinPoolEntry( newPage, thread )) ) {
@@ -578,12 +600,18 @@ namespace mongo {
                 return 0;
             }
     
-            Page::putPageNo( _latchMgr->_alloc[1]._right, Page::getPageNo( set->_page->_right ) );
+            //Page::putPageNo( _latchMgr->_alloc[1]._right, Page::getPageNo( set->_page->_right ) );
+            _latchMgr->_alloc[1]._right = set->_page->_right;
+
             unpinPoolEntry( set->_pool, thread );
             reuse = 1;
         } else {
-            newPage = Page::getPageNo( _latchMgr->_alloc->_right );
-            Page::putPageNo( _latchMgr->_alloc->_right, newPage+1 );
+            //newPage = Page::getPageNo( _latchMgr->_alloc->_right );
+            newPage = _latchMgr->_alloc->_right;
+
+            //Page::putPageNo( _latchMgr->_alloc->_right, newPage+1 );
+            _latchMgr->_alloc->_right = newPage+1;
+
             reuse = 0;
         }
 
@@ -643,7 +671,7 @@ namespace mongo {
             // determine lock mode of drill level: LockRead until we find our level
             BLTLockMode lockMode = (drill == level) ? inputMode : LockRead; 
 
-            set->_latch = _latchMgr->pinLatch( pageNo, thread );
+            set->_latch = pinLatch( pageNo, thread );
             set->_pageNo = pageNo;
 
             // pin page contents
@@ -664,7 +692,7 @@ namespace mongo {
             // release and unpin parent page
             if (prevPageNo) {
                 unlockPage( prevMode, prevLatch, thread );
-                _latchMgr->unpinLatch( prevLatch, thread );
+                unpinLatch( prevLatch, thread );
                 unpinPoolEntry( prevPoolEntry, thread );
                 prevPageNo = 0;
             }
@@ -698,16 +726,16 @@ namespace mongo {
 
                 if (inputMode != LockRead && drill == level) {
                     unlockPage( lockMode, set->_latch, thread );
-                    _latchMgr->unpinLatch( set->_latch, thread );
+                    unpinLatch( set->_latch, thread );
                     unpinPoolEntry( set->_pool, thread );
                     continue;
                 }
             }
 
             prevPageNo = set->_pageNo;
-            prevLatch  = set->_latch;
-            prevPoolEntry   = set->_pool;
-            prevMode   = lockMode;
+            prevLatch = set->_latch;
+            prevPoolEntry = set->_pool;
+            prevMode = lockMode;
 
             // find key on page at this level, descend to requested level
             if (!set->_page->_kill) {
@@ -727,7 +755,9 @@ namespace mongo {
                         }
                     }
 
-                    pageNo = Page::getPageNo( Page::slotptr(set->_page, slot)->_id );
+                    //pageNo = Page::getPageNo( Page::slotptr(set->_page, slot)->_id );
+                    pageNo = Page::slotptr(set->_page, slot)->_id.pack();
+
                     if (LOADPAGE_TRACE) {
                         __OSS__( "loadPage: next pageNo = " << pageNo );
                         Logger::logDebug( thread, __ss__, __LOC__ );
@@ -738,7 +768,8 @@ namespace mongo {
             }
 
 	slideright: //  or slide right into next page
-            pageNo = Page::getPageNo( set->_page->_right );
+            //pageNo = Page::getPageNo( set->_page->_right );
+            pageNo = set->_page->_right;
 
         } while (pageNo);
 
@@ -763,7 +794,8 @@ namespace mongo {
         uint good = 0;
 
         // make stopper key an infinite fence value
-        if (Page::getPageNo( set->_page->_right )) {
+        //if (Page::getPageNo( set->_page->_right )) {
+        if (set->_page->_right) {
             higher++;
         }
         else {
@@ -848,14 +880,19 @@ namespace mongo {
         }
 
         // store chain in second right
-        Page::putPageNo( set->_page->_right, Page::getPageNo( _latchMgr->_alloc[1]._right ) );
-        Page::putPageNo( _latchMgr->_alloc[1]._right, set->_pageNo);
+        
+        //Page::putPageNo( set->_page->_right, Page::getPageNo( _latchMgr->_alloc[1]._right ) );
+        //Page::putPageNo( _latchMgr->_alloc[1]._right, set->_pageNo);
+
+        set->_page->_right = _latchMgr->_alloc[1]._right;
+        _latchMgr->_alloc[1]._right = set->_pageNo;
+
         set->_page->_free = 1;
 
         // unlock released page
         unlockPage( LockDelete, set->_latch, thread );
         unlockPage( LockWrite, set->_latch, thread );
-        _latchMgr->unpinLatch( set->_latch, thread );
+        unpinLatch( set->_latch, thread );
         unpinPoolEntry( set->_pool, thread );
 
         // unlock allocation page
@@ -947,7 +984,8 @@ namespace mongo {
         PageNo pageNo = LEAF_page;
         Page* _frame  = (Page *)malloc( _pageSize );
     
-        while (pageNo < Page::getPageNo(_latchMgr->_alloc->_right)) {
+        //while (pageNo < Page::getPageNo(_latchMgr->_alloc->_right)) {
+        while (pageNo < _latchMgr->_alloc->_right) {
             pread( _fd, _frame, _pageSize, pageNo << _pageBits );
             if (!_frame->_free) {
                 for (uint idx = 0; idx++ < _frame->_cnt - 1; ) {

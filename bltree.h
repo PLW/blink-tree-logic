@@ -124,22 +124,22 @@ namespace mongo {
         *  @param key  -  key to insert
         *  @param keylen  -  length of key to insert
         *  @param level  -  needed by recursive insertions: for example insert => split => insert
-        *  @param docId  -  doc unique id
+        *  @param docid  -  doc unique id
         *  @param tod  -  timestamp
         *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        BLTERR insertKey( const uchar* key, uint keylen, uint level, DocId docId, uint tod );
+        BLTERR insertKey( const uchar* key, uint keylen, uint level, DocId docid, uint tod );
 
         /**
         *  Insert new key,value into the btree at given level.
         *  @param key  -  key to insert
         *  @param keylen  -  length of key to insert
-        *  @param level  -  needed by recursive insertions: for example insert => split => insert
         *  @param doc  -  document to insert
+        *  @param docid - doc unique id
         *  @param tod  -  timestamp
         *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        //BLTERR insertDoc( const uchar* key, uint keylen, uint level, Doc doc, uint tod );
+        BLTERR insertDoc( const uchar* key, uint keylen, const char* doc, DocId docid, uint tod );
 
         /**
         *  find and delete key on page by marking delete flag bit:
@@ -223,9 +223,9 @@ namespace mongo {
         */
         BLTERR fixFenceKey( PageSet* set, uint level );
 
-        BLTKey* getKey( uint slot );
-        PageNo getPageNo( uint slot );
-        uint getTod( uint slot );
+        //BLTKey* getKey( uint slot );
+        //PageNo getPageNo( uint slot );
+        //uint getTod( uint slot );
 
     protected:
         const char* _thread;        // thread name

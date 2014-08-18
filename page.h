@@ -56,6 +56,39 @@ namespace mongo {
     struct LatchSet;
     class PoolEntry;
 
+    #define OFFSET_MASK     0xffffffffffffUL
+
+    /**
+    *  doc locator:  file # + offset
+    */
+    struct DiskLoc {
+        uint64_t fileno:16;
+        uint64_t offset:48;
+
+        DiskLoc( uint64_t id )
+        :   fileno( id>>48 ),
+            offset( id & OFFSET_MASK )
+        {}
+
+        DiskLoc& operator=( uint64_t id) {
+            fileno = id>>48;
+            offset = id & OFFSET_MASK;
+            return *this;
+        }
+
+        DiskLoc& operator=( const DiskLoc& loc ) {
+            fileno = loc.fileno;
+            offset = loc.offset;
+            return *this;
+        }
+
+        uint64_t pack() {
+            return (((uint64_t)fileno)<<48) | offset;
+        }
+
+        friend std::ostream& operator<<( std::ostream& os, const DiskLoc& page );
+    };
+    
     /**
     *  Page key slot definition.
     *
@@ -72,11 +105,11 @@ namespace mongo {
         uint32_t _off:BLT_maxbits;  // page offset for key start
         uint32_t _dead:1;           // set for deleted key
         uint32_t _tod;              // time-stamp for key
-        uchar    _id[IdLength];     // id associated with key
+        DiskLoc  _id;               // docid  associated with key
 
         friend std::ostream& operator<<( std::ostream& os, const Slot& slot );
     };
-    
+
     /**
     *  first part of an index page.
     *  - immediately followed by the Slot array of keys.
@@ -86,22 +119,22 @@ namespace mongo {
         /**
         *  Pack PageNo into dest array.
         */
-        static void putPageNo( uchar* dest, PageNo );
+        //static void putPageNo( uchar* dest, PageNo );
 
         /**
         *  Unpack dest array, return PageNo
         */
-        static PageNo getPageNo( uchar* src );
+        //static PageNo getPageNo( uchar* src );
 
         /**
         *  Pack DocId into dest array.
         */
-        static void putDocId( uchar* dest, DocId );
+        //static void putDocId( uchar* dest, DocId );
 
         /**
         *  Unpack dest array, return DocId
         */
-        static DocId getDocId( uchar* src );
+        //static DocId getDocId( uchar* src );
 
         // page slot accessors
         static Slot* slotptr( Page* page, uint slot ) {
@@ -115,25 +148,26 @@ namespace mongo {
         friend std::ostream& operator<<( std::ostream& os, const Page& page );
 
     public:
-        uint32_t _cnt;              // count of keys in page
-        uint32_t _act;              // count of active keys
-        uint32_t _min;              // next key offset
-        uchar _bits:7;              // page size in bits
-        uchar _free:1;              // page is on free chain
-        uchar _level:6;             // level of page
-        uchar _kill:1;              // page is being deleted
-        uchar _dirty:1;             // page has deleted keys
-        uchar _right[IdLength];     // page number to right
+        uint32_t _cnt;            // count of keys in page
+        uint32_t _act;            // count of active keys
+        uint32_t _min;            // next key offset
+        uchar _bits:7;            // page size in bits
+        uchar _free:1;            // page is on free chain
+        uchar _level:6;           // level of page
+        uchar _kill:1;            // page is being deleted
+        uchar _dirty:1;           // page has deleted keys
+        //uchar _right[IdLength];   // page number to right
+        PageNo _right;
     };
     
     /**
     *  loadpage interface object
     */
     struct PageSet {
-        PageNo    _pageNo;          // current page number
-        Page*     _page;            // current page pointer
-        PoolEntry*     _pool;            // current page pool
-        LatchSet* _latch;           // current page latch set
+        PageNo      _pageNo;      // current page number
+        Page*       _page;        // current page pointer
+        PoolEntry*  _pool;        // current page pool
+        LatchSet*   _latch;       // current page latch set
     };
 
 }   // namespace mongo

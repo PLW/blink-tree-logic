@@ -55,11 +55,13 @@ namespace mongo {
     // default mmap alignment
     #define MMAP_MIN_SIZE   4096
 
+/*
     // packed PageNo size
     #define IdLength        8                   // packed page number size
 
     // packed DocId size
     #define DocIdLength     8                   // packed docid size
+*/
 
     // page size parameters
     #define BLT_minbits     12                  // minimum page size in bits = lg(4K)

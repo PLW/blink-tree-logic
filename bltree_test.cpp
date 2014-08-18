@@ -296,7 +296,10 @@ namespace mongo {
 		
 		            set->_latch = mgr->getLatchMgr()->pinLatch( pageNo, thread );
 		            mgr->lockPage( LockRead, set->_latch, thread );
-		            next = Page::getPageNo( page->_right );
+
+		            //next = Page::getPageNo( page->_right );
+		            next = page->_right;
+
 		            cnt += page->_act;
 		
 		            //cout << "\npage id : " << pageNo << " -> " << next << '\n' << *(page) << endl;
@@ -332,7 +335,8 @@ namespace mongo {
 		        PageNo pageNo = LEAF_page;
 		        PageNo next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
 		
-		        while (pageNo < Page::getPageNo(mgr->getLatchMgr()->_alloc->_right)) {
+		        //while (pageNo < Page::getPageNo(mgr->getLatchMgr()->_alloc->_right)) {
+		        while (pageNo < mgr->getLatchMgr()->_alloc->_right) {
 		            PageNo off = pageNo << mgr->getPageBits();
 		            pread( mgr->getFD(), blt->getFrame(), mgr->getPageSize(), off );
 		            if (!blt->getFrame()->_free && !blt->getFrame()->_level) cnt += blt->getFrame()->_act;

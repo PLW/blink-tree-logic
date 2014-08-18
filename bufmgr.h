@@ -257,6 +257,17 @@ namespace mongo {
         PoolEntry* pinPoolEntry( PageNo pageNo, const char* thread );
         
         /**
+        *  release latch pin
+        */
+        void unpinLatch( LatchSet* set, const char* thread );
+
+        /**
+        *  find existing latchset or inspire new one
+        *  return with latchset pinned
+        */
+        LatchSet* pinLatch( PageNo pageNo, const char* thread );
+
+        /**
         *  Place write, read, or parent lock on requested page.
         *  @param lockMode  -  
         *  @param set  -  
