@@ -168,9 +168,7 @@ namespace mongo {
         uint latchSetsPerPage = pageSize / sizeof(LatchSet);
         uint nlatchPage = BLT_latchtableSize / latchSetsPerPage + 1; 	// round up
 
-        //Page::putPageNo( latchMgr->_alloc->_right, MIN_level + 1 + nlatchPage );	// first free page
         latchMgr->_alloc->_right = MIN_level + 1 + nlatchPage;	// first free page
-
         latchMgr->_alloc->_bits = bits;
         latchMgr->_nlatchPage = nlatchPage;
         latchMgr->_latchTotal = nlatchPage * latchSetsPerPage;
@@ -198,9 +196,6 @@ namespace mongo {
 		// initialize root page and leaf page
         for (uint level = MIN_level; level--; ) {
             Page::slotptr(latchMgr->_alloc, 1)->_off = pageSize - 3;	// top 3 bytes are +infty key
-
-            //Page::putPageNo( Page::slotptr(latchMgr->_alloc, 1)->_id,	// lvl==0 >leaf,lvl==1->root
-            //                      level ? MIN_level - level + 1 : 0; 	// next docid, (e.g.) 2, then 0
 
             Page::slotptr(latchMgr->_alloc, 1)->_id	                    // lvl==0->leaf,lvl==1->root
                             = level ? MIN_level - level + 1 : 0; 	    // next docid, (e.g.) 2, then 0
@@ -588,7 +583,6 @@ namespace mongo {
         PageSet set[1];
         int reuse;
 
-        //PageNo newPage = Page::getPageNo( _latchMgr->_alloc[1]._right );
         PageNo newPage = _latchMgr->_alloc[1]._right;
 
         if (newPage) {
@@ -600,22 +594,16 @@ namespace mongo {
                 return 0;
             }
     
-            //Page::putPageNo( _latchMgr->_alloc[1]._right, Page::getPageNo( set->_page->_right ) );
             _latchMgr->_alloc[1]._right = set->_page->_right;
-
             unpinPoolEntry( set->_pool, thread );
             reuse = 1;
         } else {
-            //newPage = Page::getPageNo( _latchMgr->_alloc->_right );
             newPage = _latchMgr->_alloc->_right;
-
-            //Page::putPageNo( _latchMgr->_alloc->_right, newPage+1 );
             _latchMgr->_alloc->_right = newPage+1;
-
             reuse = 0;
         }
 
-        // unlock allocation latch
+        // unlock allocation latch - a bad idea here!
         //SpinLatch::spinReleaseWrite( _latchMgr->_lock, thread );
 
         if (pwrite( _fd, inputPage, _pageSize, newPage << _pageBits) < _pageSize) {
@@ -755,7 +743,6 @@ namespace mongo {
                         }
                     }
 
-                    //pageNo = Page::getPageNo( Page::slotptr(set->_page, slot)->_id );
                     pageNo = Page::slotptr(set->_page, slot)->_id.pack();
 
                     if (LOADPAGE_TRACE) {
@@ -768,7 +755,6 @@ namespace mongo {
             }
 
 	slideright: //  or slide right into next page
-            //pageNo = Page::getPageNo( set->_page->_right );
             pageNo = set->_page->_right;
 
         } while (pageNo);
@@ -794,7 +780,6 @@ namespace mongo {
         uint good = 0;
 
         // make stopper key an infinite fence value
-        //if (Page::getPageNo( set->_page->_right )) {
         if (set->_page->_right) {
             higher++;
         }
@@ -880,10 +865,6 @@ namespace mongo {
         }
 
         // store chain in second right
-        
-        //Page::putPageNo( set->_page->_right, Page::getPageNo( _latchMgr->_alloc[1]._right ) );
-        //Page::putPageNo( _latchMgr->_alloc[1]._right, set->_pageNo);
-
         set->_page->_right = _latchMgr->_alloc[1]._right;
         _latchMgr->_alloc[1]._right = set->_pageNo;
 
@@ -984,7 +965,6 @@ namespace mongo {
         PageNo pageNo = LEAF_page;
         Page* _frame  = (Page *)malloc( _pageSize );
     
-        //while (pageNo < Page::getPageNo(_latchMgr->_alloc->_right)) {
         while (pageNo < _latchMgr->_alloc->_right) {
             pread( _fd, _frame, _pageSize, pageNo << _pageBits );
             if (!_frame->_free) {

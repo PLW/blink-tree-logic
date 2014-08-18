@@ -223,10 +223,6 @@ namespace mongo {
         */
         BLTERR fixFenceKey( PageSet* set, uint level );
 
-        //BLTKey* getKey( uint slot );
-        //PageNo getPageNo( uint slot );
-        //uint getTod( uint slot );
-
     protected:
         const char* _thread;        // thread name
 	    BufferMgr* _mgr;            // buffer pool manager

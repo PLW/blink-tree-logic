@@ -116,26 +116,6 @@ namespace mongo {
     */
     class Page {
     public:
-        /**
-        *  Pack PageNo into dest array.
-        */
-        //static void putPageNo( uchar* dest, PageNo );
-
-        /**
-        *  Unpack dest array, return PageNo
-        */
-        //static PageNo getPageNo( uchar* src );
-
-        /**
-        *  Pack DocId into dest array.
-        */
-        //static void putDocId( uchar* dest, DocId );
-
-        /**
-        *  Unpack dest array, return DocId
-        */
-        //static DocId getDocId( uchar* src );
-
         // page slot accessors
         static Slot* slotptr( Page* page, uint slot ) {
             return (((Slot *)(page+1)) + (slot-1));

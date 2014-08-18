@@ -81,60 +81,6 @@ namespace mongo {
     *  Page slots use 1-based indexing.
     */
 
-    /**
-    *  Move PageNo into a dest array.
-    */
-/*
-    void Page::putPageNo( uchar* dest, PageNo pageNo ) {
-        int i = IdLength;
-        while (i--) {
-            dest[i] = (uchar)pageNo;
-            pageNo >>= 8;
-        }
-    }
-*/
-    
-    /**
-    *  Extract PageNofrom byte array
-    */
-/*
-    PageNo Page::getPageNo( uchar* src ) {
-        PageNo pageNo = 0;
-        for (int i = 0; i < IdLength; ++i) {
-            pageNo <<= 8;
-            pageNo |= *src++; 
-        }
-        return pageNo;
-    }
-*/
-    
-    /**
-    *  Move DocId into byte array
-    */
-/*
-    void Page::putDocId( uchar* dest, DocId docId ) {
-        int i = DocIdLength;
-        while (i--) {
-            dest[i] = (uchar)docId;
-            docId >>= 8;
-        }
-    }
-*/
-    
-    /**
-    *  Extract Id bytes from a src array.
-    */
-/*
-    DocId Page::getDocId( uchar* src ) {
-        DocId docId = 0;
-        for (int i = 0; i < DocIdLength; ++i) {
-            docId <<= 8;
-            docId |= *src++; 
-        }
-        return docId;
-    }
-*/
-    
     // debugging output
 
     std::ostream& operator<<( std::ostream& os, const DiskLoc& loc ) {

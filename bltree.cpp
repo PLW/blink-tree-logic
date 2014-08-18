@@ -233,7 +233,6 @@ namespace mongo {
             }
         
         	// and promote as new root contents
-            //child->_pageNo = Page::getPageNo( Page::slotptr(root->_page, idx)->_id );
             child->_pageNo = Page::slotptr(root->_page, idx)->_id.pack();
         
             child->_latch = _mgr->pinLatch( child->_pageNo, _thread );
@@ -347,7 +346,6 @@ namespace mongo {
         memcpy( lowerFence, key, key->_len + 1 );
 
         // obtain lock on right page
-        //right->_pageNo = Page::getPageNo( set->_page->_right );
         right->_pageNo = set->_page->_right;
         right->_latch = _mgr->pinLatch( right->_pageNo, _thread );
         _mgr->lockPage( LockWrite, right->_latch, _thread );
@@ -374,7 +372,6 @@ namespace mongo {
     
         // mark right page deleted: point it to left page until we can post parent updates
 
-        //Page::putPageNo( right->_page->_right, set->_pageNo );
         right->_page->_right = set->_pageNo;
 
         right->_page->_kill = 1;
@@ -431,7 +428,6 @@ namespace mongo {
         // if key exists, return docid, otherwise return 0
         if (slot <= set->_page->_cnt ) {
             if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
-                //id = Page::getDocId( Page::slotptr( set->_page, slot )->_id );
                 id = Page::slotptr( set->_page, slot )->_id.pack();
             }
 			else {
@@ -535,9 +531,7 @@ namespace mongo {
         nxt -= *leftKey + 1;
         memcpy( (uchar *)root->_page + nxt, leftKey, *leftKey + 1 );
 
-        //Page::putPageNo( Page::slotptr(root->_page, 1 )->_id, left);
         Page::slotptr(root->_page, 1 )->_id = left;
-
         Page::slotptr(root->_page, 1)->_off = nxt;
         
         // insert stopper key on newroot page
@@ -548,14 +542,10 @@ namespace mongo {
         ((uchar *)root->_page)[nxt+1] = 0xff;
         ((uchar *)root->_page)[nxt+2] = 0xff;
 
-        //Page::putPageNo( Page::slotptr(root->_page, 2)->_id, pageNo2 );
         Page::slotptr(root->_page, 2)->_id = pageNo2;
-
         Page::slotptr(root->_page, 2)->_off = nxt;
     
-        //Page::putPageNo( root->_page->_right, 0 );
         root->_page->_right, 0;
-
         root->_page->_min = nxt;        // reset lowest used offset and key count
         root->_page->_cnt = 2;
         root->_page->_act = 2;
@@ -664,9 +654,7 @@ namespace mongo {
         // remember fence key for smaller page
         memcpy( fenceKey, key, key->_len + 1 );
 
-        //Page::putPageNo(set->_page->_right, right->_pageNo);
         set->_page->_right = right->_pageNo;
-
         set->_page->_min = nxt;
         set->_page->_cnt = idx;
     
@@ -750,7 +738,6 @@ namespace mongo {
                 if (slotPtr->_dead) set->_page->_act++;
                 slotPtr->_dead = 0;
                 slotPtr->_tod = tod;
-                //Page::putDocId( slotPtr->_id, id );
                 slotPtr->_id = id;
 
                 _mgr->unlockPage( LockWrite, set->_latch, _thread );
@@ -803,9 +790,7 @@ namespace mongo {
         // insert new key data into vacant slot
         Slot* slotPtr = Page::slotptr(set->_page, slot);
 
-        //Page::putPageNo( slotPtr->_id, id );
         slotPtr->_id = id;
-
         slotPtr->_off  = set->_page->_min;
         slotPtr->_tod  = tod;
         slotPtr->_dead = 0;
@@ -867,7 +852,6 @@ namespace mongo {
                 slotPtr->_dead = 0;
                 slotPtr->_tod = tod;
                 slotPtr->_id = id;
-                //Page::putDocId( slotPtr->_id, id );
                 
                 _mgr->unlockPage( LockWrite, set->_latch, _thread );
                 _mgr->unpinLatch( set->_latch, _thread );
@@ -919,7 +903,6 @@ namespace mongo {
         // insert new key data into vacant slot
         Slot* slotPtr = Page::slotptr(set->_page, slot);
 
-        //Page::putPageNo( slotPtr->_id, id );
         slotPtr->_id = id;
 
         slotPtr->_off  = set->_page->_min;
@@ -970,7 +953,6 @@ namespace mongo {
         PageSet set[1];
     
         do {
-            //PageNo right = Page::getPageNo( _cursor->_right );
             PageNo right = _cursor->_right;
     
             while (slot++ < _cursor->_cnt) {
@@ -1010,11 +992,6 @@ namespace mongo {
         return (_err = BLTERR_ok);
     }
     
-    //BLTKey* BLTree::getKey( uint slot )   { return Page::keyptr(_cursor, slot); }
-    //PageNo BLTree::getPageNo( uint slot ) { return Page::getPageNo( Page::slotptr(_cursor,slot)->_id ); }
-    //PageNo BLTree::getPageNo( uint slot ) { return Page::slotptr(_cursor,slot)->_id.pack(); }
-    //uint BLTree::getTod( uint slot )      { return Page::slotptr(_cursor,slot)->_tod; } 
-
     /**
     *
     */
@@ -1091,7 +1068,6 @@ namespace mongo {
         PageNo pageNo = LEAF_page;
         Page* _frame  = (Page *)malloc( _mgr->getPageSize() );
     
-        //while (pageNo < Page::getPageNo(_mgr->getLatchMgr()->_alloc->_right)) {
         while (pageNo < _mgr->getLatchMgr()->_alloc->_right) {
             pread( _mgr->getFD(), _frame, _mgr->getPageSize(), pageNo << _mgr->getPageBits() );
             if (!_frame->_free) {
