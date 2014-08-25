@@ -21,11 +21,11 @@
 
 # compile everything
 g++ -O3 -o random_keys random_keys.cpp
-g++ -O3 -o logger logger.cpp logger_test.cpp
-g++ -O3 -o page page.cpp page_test.cpp
-g++ -O3 -o latchmgr logger.cpp page.cpp latchmgr.cpp latchmgr_test.cpp
-g++ -O3 -o bufmgr logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bufmgr_test.cpp
-g++ -O3 -o bltree logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bltree.cpp bltree_test.cpp -lpthread
+g++ -DSTANDALONE -O3 -o logger logger.cpp logger_test.cpp
+g++ -DSTANDALONE -O3 -o page page.cpp page_test.cpp
+g++ -DSTANDALONE -O3 -o latchmgr logger.cpp page.cpp latchmgr.cpp latchmgr_test.cpp
+g++ -DSTANDALONE -O3 -o bufmgr logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bufmgr_test.cpp
+g++ -DSTANDALONE -O3 -o bltree logger.cpp blterr.cpp page.cpp latchmgr.cpp bufmgr.cpp bltree.cpp bltree_test.cpp -lpthread
 
 # create a file of random keys
 ./random_keys >keys.txt
