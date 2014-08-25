@@ -39,6 +39,8 @@ namespace mongo {
     typedef uint16_t        ushort;
     typedef uint32_t        uint;
     typedef uint64_t        ulong;
+
+    #define IdLength        8
     
     #define __LOC__         __FILE__,__FUNCTION__,__LINE__
     #define __OSS__(X)      std::ostringstream __oss__; __oss__ << X; std::string __ss__ = __oss__.str();
@@ -54,14 +56,6 @@ namespace mongo {
 
     // default mmap alignment
     #define MMAP_MIN_SIZE   4096
-
-/*
-    // packed PageNo size
-    #define IdLength        8                   // packed page number size
-
-    // packed DocId size
-    #define DocIdLength     8                   // packed docid size
-*/
 
     // page size parameters
     #define BLT_minbits     12                  // minimum page size in bits = lg(4K)

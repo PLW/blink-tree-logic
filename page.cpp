@@ -93,9 +93,7 @@ namespace mongo {
         return os <<
             "Slot["
             " offset = " << (uint32_t)slot._off <<
-            ", dead bit = " << (bool)slot._dead <<
-            ", timestamp = " << (uint32_t)slot._tod <<
-            ", id = " << slot._id << ']';
+            ", dead bit = " << (bool)slot._dead << ']';
     }
 
     std::ostream& operator<<( std::ostream& os, const Page& page ) {

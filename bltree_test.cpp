@@ -148,9 +148,6 @@ namespace mongo {
 		    // per thread index accessor
 		    BLTree* blt = BLTree::create( mgr, thread );
 		
-		    time_t tod[1];
-		    time( tod );
-		
 		    __OSS__( "args->_type = " << args->_type );
 		    Logger::logDebug( thread, __ss__, __LOC__ );
 		
@@ -165,6 +162,11 @@ namespace mongo {
 		            __OSS__( "\nINDEXING: " << args->_infile );
 		            Logger::logInfo( thread, __ss__, __LOC__ );
 		        }
+
+                char val[256];
+                for (uint i=0; i<256; ++i) {
+                    val[i] = 32 + random()%95;  //32 .. 126
+                }
 		
 		        FILE* in = fopen( args->_infile, "rb" );
 		        if (in) {
@@ -176,7 +178,7 @@ namespace mongo {
 		                if (ch == '\n') {
 		                    docid++;
 		
-		                    if (blt->insertKey( key, len, 0, docid, *tod )) {
+		                    if (blt->insertKeyVal( key, len, (uchar *)val, 256, 0 )) {
 		                        __OSS__( "Error " << blt->getLastError() << ", docid " << docid );
 		                        Logger::logError( thread, __ss__, __LOC__ );
 		                        exit(0);
@@ -242,6 +244,7 @@ namespace mongo {
 		        FILE* in = fopen( args->_infile, "rb" );
 		        if (in) {
 		            BLTERR err;
+                    char val[256];
 		            uint found = 0;
 		            int line = 0;
 		            int len = 0;
@@ -250,7 +253,8 @@ namespace mongo {
 		            while (ch = getc(in), ch != EOF) {
 		                if (ch == '\n') {
 		                    ++line;
-		                    if (blt->findKey( key, len )) {
+		                    int valLen = blt->findKey( key, len, (uchar *)val, 256 );
+		                    if (-1 != valLen) {
 		                        ++found;
 		                    }
 		                    else if ( (err = blt->getLastError()) ) {

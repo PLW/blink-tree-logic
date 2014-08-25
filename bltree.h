@@ -120,52 +120,66 @@ namespace mongo {
         void close();
 
         /**
-        *  Insert new key into the btree at given level.
+        *  Insert new key,value into the btree at given level.
         *  @param key  -  key to insert
-        *  @param keylen  -  length of key to insert
-        *  @param level  -  needed by recursive insertions: for example insert => split => insert
-        *  @param docid  -  doc unique id
-        *  @param tod  -  timestamp
+        *  @param keyLen  -  length of key to insert
+        *  @param doc  -  document to insert
+        *  @param doclen  -  document length
+        *  @param level  -  tree level to insert into 
         *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        BLTERR insertKey( const uchar* key, uint keylen, uint level, DocId docid, uint tod );
+        BLTERR insertKeyVal( const uchar* key,
+                             uint keyLen,
+                             const uchar* val,
+                             uint valLen,
+                             uint level );
 
         /**
         *  Insert new key,value into the btree at given level.
         *  @param key  -  key to insert
-        *  @param keylen  -  length of key to insert
-        *  @param doc  -  document to insert
-        *  @param docid - doc unique id
-        *  @param tod  -  timestamp
+        *  @param keyLen  -  length of key to insert
+        *  @param pageNo  -  page number to insert (as doc)
+        *  @param level  -  tree level to insert into 
         *  @return BLTERR::OK if no error, otherwise appropriate error
         */
-        BLTERR insertDoc( const uchar* key, uint keylen, const char* doc, DocId docid, uint tod );
+        BLTERR insertKeyVal( const uchar* key,
+                             uint keyLen,
+                             PageNo pageNo,
+                             uint level );
 
         /**
         *  find and delete key on page by marking delete flag bit:
         *   if page becomes empty, delete it from the btree
         *  @param key  -  
-        *  @param keylen  -  
+        *  @param keyLen  -  
         *  @param level  -  
         *  @return
         */
-        BLTERR deleteKey( const uchar* key, uint keylen, uint level );
+        BLTERR deleteKey( const uchar* key,
+                          uint keyLen,
+                          uint level );
 
         /**
         *  Find key in leaf level and return pageNo.
-        *  @param key  -  
-        *  @param keylen  -  
-        *  @return
+        *  @param inKey  -   key to find 
+        *  @param inKeyLen  -  length of search key
+        *  @param outVal  -  output value
+        *  @param outValMaxLen  -  maximum output length
+        *  @return output value length
         */
-        PageNo findKey( const uchar* key, uint keylen );
+        int findKey( const uchar* inKey,
+                     uint inKeyLen,
+                     uchar* outVal,
+                     uint outValMaxLen );
 
         /**
         *  Cache page of keys into cursor: return starting slot for given key
         *  @param key  -  
-        *  @param keylen  -  
+        *  @param keyLen  -  
         *  @return
         */
-        uint startKey( const uchar* key, uint keylen );
+        uint startKey( const uchar* key,
+                       uint keyLen );
 
         /**
         *  Return next slot for cursor page, or slide cursor right into next page.
@@ -198,7 +212,9 @@ namespace mongo {
         *  @param docId  -  
         *  @return
         */
-        BLTERR splitRoot( PageSet* root, const uchar* leftKey, PageNo pageNo );
+        BLTERR splitRoot( PageSet* root,
+                          const uchar* leftKey,
+                          PageNo pageNo );
 
         /**
         *  Split already locked full node: return unlocked.
@@ -208,12 +224,13 @@ namespace mongo {
 
         /**
         *  Check page for space available, clean if necessary.
-        *  @param page  -  
-        *  @param amt  -  
-        *  @param slot  -  
+        *  @param page  -  page to be compressed 
+        *  @param keyLen  -  length of key trying to insert
+        *  @param valLen  -  length of value trying to insert
+        *  @param slot  -  slot where we are inserting new key
         *  @return  0 if page needs splitting, >0 if new slot value
         */
-        uint cleanPage( Page* page, uint amt, uint slot );
+        uint cleanPage( Page* page, uint keyLen, uint valLen, uint slot );
 
         /**
         *  Fence key was deleted from a page: push new fence value upwards.
@@ -228,7 +245,6 @@ namespace mongo {
 	    BufferMgr* _mgr;            // buffer pool manager
 	    Page* _cursor;              // cached frame for start/next (not mapped)
 	    Page* _frame;               // spare frame for the page split (not mapped)
-	    Page* _zero;                // page frame for zeroes at end of file
 	    PageNo _cursorPage;         // current cursor page number    
 	    uchar* _mem;                // frame, cursor, page memory buffer
 	    int _found;                 // last delete or insert was found

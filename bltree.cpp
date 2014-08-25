@@ -78,64 +78,64 @@
 
 namespace mongo {
 
-	/**
-	*	This is an implementation of the Lehman-Yao B-Link tree data type.
-	*
-	*	[LH] Lehman, Philip and Yao, S. Bing: "Efficient Locking for Concurrent
-	*		 Operations on B-Trees, "ACM Transactions on Database Systems,
-	*		 Vol 6, No 4, 1981, pp. 650-670.
-	*
-	*	Leaf nodes are at level 0 and contain doc locators.
-	*	Internal nodes include only separator keys and child page locators.
-	*
-	*	Range queries a <= k < b are resolved by locating the (page,slot)
-	*	of min { (k,loc) : a <= k }, and max { (k,loc) : k < b }, then
-	*	traversing leaf nodes from min (page,slot) to max (page,slot).
-	*
-	*	Nodes are managed with fine-grained locking, one LatchSet per page.
-	*	A LatchSet includes three independent latches for managing
-	*
-	*		1. access-intent / delete
-	*		2. read / write
-	*		3. parent fence key update
-	*
-	*	See the documentation in latchmgr.h for details, specifically, the
-	*	compatibility matrix for each latch.  The sets are independent, so you can
-	*	hold an access-intent and a read latch at the same time, for instance.
-	*
-	*	In the original Lehman-Yao paper, insertion maintained a stack of nodes
-	*	traversed, and then popped the stack to determine where to place new separator
-	*	keys in the event of a node split.  If an ancestor node were split by some
-	*	other thread, then the current thread may need to traverse a right sibling
-	*	link to find the node where the new separator key should go.  Hence the name
-	*	'B-Link' tree.  In our implementation, no stack is maintained.  Instead,
-	*	the insertKey method recursively call itself with the separator key and a
-	*	'level' parameter == L+1 == parent level.  This entails retraversing from
-	*	the root to the parent node.
-	*
-	*	[LY] did not provide an algorithm for deletion and reuse of vacant nodes.
-	*	But
-	*
-	*	[LS] Lanin, Vladimir and Shasha, Dennis: "A symmetric concurrent B-tree
-	*		 algorithm," Proc. ACM 86, 1986, pp. 380-389.
-	*
-	*	does provides a proposal for such an algorithm.  We implement an algorithm
-	*	similar to [LS] by setting tombstones and decrementing a count of
-	*	active keys.  Once the active key count decrements to 0, the node is empty
-	*	and may be reclaimed.  (The implementation does not currently attempt to
-	*	consolidate sparse adjacent non-empty siblings.)  The empty node's right
-	*	sibling keys are transferred into the empty node.  The right sibling is then
-	*	spliced out of the sibling list and moved to the head of the free list.
-	*	This is done because the sibling list is singly linked, and we have no
-	*	predecesor link.  In the case where the empty node is the last node on
-	*	given level, and has no right sibling, it is left in place and is available
-	*	to contain new keys with curMax < key <= +infty.  During the deletion,
-	*	the empty node's right sibling pointer is reused as a forwarding pointer
-	*	to the left sibling, allowing concurrent read access though (the now obsolete)
-	*	empty right sibling.
-	*
-	*
-	*/
+    /**
+    *    This is an implementation of the Lehman-Yao B-Link tree data type.
+    *
+    *    [LH] Lehman, Philip and Yao, S. Bing: "Efficient Locking for Concurrent
+    *         Operations on B-Trees, "ACM Transactions on Database Systems,
+    *         Vol 6, No 4, 1981, pp. 650-670.
+    *
+    *    Leaf nodes are at level 0 and contain docs inline.
+    *    Internal nodes include only separator keys and child page locators.
+    *
+    *    Range queries a <= k < b are resolved by locating the (page,slot)
+    *    of min { (k,loc) : a <= k }, and max { (k,loc) : k < b }, then
+    *    traversing leaf nodes from min (page,slot) to max (page,slot).
+    *
+    *    Nodes are managed with fine-grained locking, one LatchSet per page.
+    *    A LatchSet includes three independent latches for managing
+    *
+    *        1. access-intent / delete
+    *        2. read / write
+    *        3. parent fence key update
+    *
+    *    See the documentation in latchmgr.h for details, specifically, the
+    *    compatibility matrix for each latch.  The sets are independent, so you can
+    *    hold an access-intent and a read latch at the same time, for instance.
+    *
+    *    In the original Lehman-Yao paper, insertion maintained a stack of nodes
+    *    traversed, and then popped the stack to determine where to place new separator
+    *    keys in the event of a node split.  If an ancestor node were split by some
+    *    other thread, then the current thread may need to traverse a right sibling
+    *    link to find the node where the new separator key should go.  Hence the name
+    *    'B-Link' tree.  In our implementation, no stack is maintained.  Instead,
+    *    the insertKey method recursively call itself with the separator key and a
+    *    'level' parameter == L+1 == parent level.  This entails retraversing from
+    *    the root to the parent node.
+    *
+    *    [LY] did not provide an algorithm for deletion and reuse of vacant nodes.
+    *    But
+    *
+    *    [LS] Lanin, Vladimir and Shasha, Dennis: "A symmetric concurrent B-tree
+    *         algorithm," Proc. ACM 86, 1986, pp. 380-389.
+    *
+    *    does provides a proposal for such an algorithm.  We implement an algorithm
+    *    similar to [LS] by setting tombstones and decrementing a count of
+    *    active keys.  Once the active key count decrements to 0, the node is empty
+    *    and may be reclaimed.  (The implementation does not currently attempt to
+    *    consolidate sparse adjacent non-empty siblings.)  The empty node's right
+    *    sibling keys are transferred into the empty node.  The right sibling is then
+    *    spliced out of the sibling list and moved to the head of the free list.
+    *    This is done because the sibling list is singly linked, and we have no
+    *    predecesor link.  In the case where the empty node is the last node on
+    *    given level, and has no right sibling, it is left in place and is available
+    *    to contain new keys with curMax < key <= +infty.  During the deletion,
+    *    the empty node's right sibling pointer is reused as a forwarding pointer
+    *    to the left sibling, allowing concurrent read access though (the now obsolete)
+    *    empty right sibling.
+    *
+    *
+    */
 
     void BLTree::close() {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
@@ -158,12 +158,9 @@ namespace mongo {
         memset( blt, 0, sizeof(*blt) );
         blt->_thread    = thread;
         blt->_mgr       = mgr;
-        blt->_mem       = (uchar *)malloc( 3 * mgr->getPageSize() );
+        blt->_mem       = (uchar *)malloc( 2 * mgr->getPageSize() );
         blt->_frame     = (Page*)(blt->_mem);
-        blt->_zero      = (Page*)(blt->_mem + 1 * mgr->getPageSize() );
-        blt->_cursor    = (Page*)(blt->_mem + 2 * mgr->getPageSize() );
-        memset( blt->_zero, 0, mgr->getPageSize() );
-
+        blt->_cursor    = (Page*)(blt->_mem + mgr->getPageSize() );
         return blt;
     }
     
@@ -184,9 +181,9 @@ namespace mongo {
         BLTKey* key;
     
         // remove the old fence value
-        key = Page::keyptr( set->_page, set->_page->_cnt );	// i.e. pull out fence key
-        memcpy( rightKey, key, key->_len + 1);				// save it
-        memset( Page::slotptr( set->_page, set->_page->_cnt-- ), 0, sizeof(Slot) );		// clear out fence slot
+        key = Page::keyptr( set->_page, set->_page->_cnt );    // i.e. pull out fence key
+        memcpy( rightKey, key, key->_len + 1);                // save it
+        memset( Page::slotptr( set->_page, set->_page->_cnt-- ), 0, sizeof(Slot) );        // clear out fence slot
         set->_page->_dirty = 1;
     
         key = Page::keyptr( set->_page, set->_page->_cnt);
@@ -197,10 +194,10 @@ namespace mongo {
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // insert new (now smaller) fence key / upstairs
-        if (insertKey( leftKey+1, *leftKey, level+1, pageNo, time(NULL) )) {
+        if (insertKeyVal( leftKey+1, *leftKey, pageNo, level+1 )) {
             return _err;
         }
-    
+
         // delete old fence key / upstairs
         if (deleteKey( rightKey+1, *rightKey, level+1 )) {
             return _err;
@@ -224,20 +221,20 @@ namespace mongo {
 
         PageSet child[1];
     
-		// collapse a linear chain from root
+        // collapse a linear chain from root
         do {
-        	// find the only child entry
+            // find the only child entry
             uint idx;
             for (idx = 0; idx++ < root->_page->_cnt; ) {
                 if (!Page::slotptr(root->_page, idx)->_dead) break;
             }
         
-        	// and promote as new root contents
-            child->_pageNo = Page::slotptr(root->_page, idx)->_id.pack();
-        
+            // and promote as new root contents
+            child->_pageNo = BLTVal::getPageNo( Page::valptr( root->_page, idx )->_value );
+
             child->_latch = _mgr->pinLatch( child->_pageNo, _thread );
-            _mgr->lockPage( LockDelete, child->_latch, _thread );	// waits on AI locks
-            _mgr->lockPage( LockWrite, child->_latch, _thread );	// prepare to modify
+            _mgr->lockPage( LockDelete, child->_latch, _thread );    // waits on AI locks
+            _mgr->lockPage( LockWrite, child->_latch, _thread );    // prepare to modify
         
             if ( (child->_pool = _mgr->pinPoolEntry( child->_pageNo, _thread )) ) {
                 child->_page = _mgr->page( child->_pool, child->_pageNo, _thread );
@@ -261,12 +258,12 @@ namespace mongo {
     *  if page becomes empty, delete it from the btree.
     *
     *  Note: emptied block is one to the right, if any.
-    *  			It's a singly linked list, we access one to the right,
-    *  			move all the keys into the current (empty) node,
-    *  			and delete the guy to the right.  If no node to the
-    *  			right then we skip this step, leave an empty node,
-    *  			available for use in the tree - for cuurent_max < key <= +infty
-    *  	
+    *              It's a singly linked list, we access one to the right,
+    *              move all the keys into the current (empty) node,
+    *              and delete the guy to the right.  If no node to the
+    *              right then we skip this step, leave an empty node,
+    *              available for use in the tree - for cuurent_max < key <= +infty
+    *      
     */
     BLTERR BLTree::deleteKey( const uchar* inputKey, uint inputKeyLen, uint level ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
@@ -373,7 +370,6 @@ namespace mongo {
         // mark right page deleted: point it to left page until we can post parent updates
 
         right->_page->_right = set->_pageNo;
-
         right->_page->_kill = 1;
     
         _mgr->lockPage( LockParent, right->_latch, _thread );
@@ -382,7 +378,7 @@ namespace mongo {
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // redirect higher key directly to our new node contents
-        if (insertKey( higherFence+1, *higherFence, level+1, set->_pageNo, time(NULL)) ) {
+        if (insertKeyVal( higherFence+1, *higherFence, set->_pageNo, level+1 )) {
             return _err;
         }
     
@@ -406,46 +402,59 @@ namespace mongo {
     
     /**
     *  find key in leaf level and return pageNo
+    *  @return - the length of value (or valueMax),
+    *            or -1 = not found
     */
-    DocId BLTree::findKey( const uchar* inputKey, uint inputKeyLen ) {
+    int BLTree::findKey( const uchar* inKey,
+                         uint inKeyLen,
+                         uchar* outVal,
+                         uint outValMaxLen )
+    {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        uassert( -1, "NULL == inputKey", NULL != inputKey );
+        uassert( -1, "NULL == inKey", NULL != inKey );
 
         PageSet set[1];
-        DocId id = 0;
         BLTKey* key;
+        int outValLen = 0;
     
-        uint slot = _mgr->loadPage( set, inputKey, inputKeyLen, 0, LockRead, _thread );
+        uint slot = _mgr->loadPage( set, inKey, inKeyLen, 0, LockRead, _thread );
         if (slot) {
             key = Page::keyptr( set->_page, slot );
         }
         else {
-			Logger::logDebug( _thread, "loadPage failed", __LOC__ );
+            Logger::logDebug( _thread, "loadPage failed", __LOC__ );
             return 0;
         }
     
-        // if key exists, return docid, otherwise return 0
+        // if key exists, load return value, otherwise return -1 (not found)
         if (slot <= set->_page->_cnt ) {
-            if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
-                id = Page::slotptr( set->_page, slot )->_id.pack();
+            if (!BLTKey::keycmp( key, inKey, inKeyLen )) {
+                BLTVal* val = Page::valptr( set->_page, slot );
+                outValLen = (outValMaxLen > val->_len ? val->_len : outValMaxLen); 
+                memcpy( outVal, val, outValLen );
             }
-			else {
-				Logger::logDebug( _thread, "keycmp failed", __LOC__ );
-			}
+            else {
+                Logger::logDebug( _thread, "keycmp failed", __LOC__ );
+                return -1;
+            }
         }
     
         _mgr->unlockPage( LockRead, set->_latch, _thread );
         _mgr->unpinLatch( set->_latch, _thread );
         _mgr->unpinPoolEntry( set->_pool, _thread );
-        return id;
+        return outValLen;
     }
     
     /**
     *  Check page for space available, clean if necessary.
     *  @return 0 - page needs splitting, >0  new slot value
     */
-    uint BLTree::cleanPage( Page* page, uint amt, uint slot ) {	// XX fix: amt -> inputKeyLen
+    uint BLTree::cleanPage( Page* page,
+                            uint keyLen,
+                            uint valLen,
+                            uint slot )
+    {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
         uassert( -1, "NULL == page", NULL != page );
@@ -455,9 +464,10 @@ namespace mongo {
         uint max = page->_cnt;
         uint newslot = max;
         BLTKey* key;
+        BLTVal* val;
     
-		// check if room for one more slot + the new key
-        if (page->_min >= (max+1) * sizeof(Slot) + sizeof(*page) + amt + 1 ) {
+        // check if room for one more slot + the new key
+        if (page->_min >= (max+1)*sizeof(Slot) + sizeof(*page) + keyLen + 1 + valLen + 1) {
             return slot;
         }
     
@@ -482,21 +492,24 @@ namespace mongo {
             nxt -= key->_len + 1;
             memcpy( (uchar *)page + nxt, key, key->_len + 1 );
     
+            // copy the value
+            val = Page::valptr(_frame, cnt);
+            nxt -= val->_len + 1;
+            ((uchar*)page)[nxt] = val->_len;
+            memcpy( (uchar *)page + nxt + 1, val, val->_len );
+    
             // copy slot
-            //memcpy( Page::slotptr(page, ++idx)->_id, Page::slotptr(_frame, cnt)->_id, IdLength );
-            Page::slotptr(page, ++idx)->_id = Page::slotptr(_frame, cnt)->_id;
+            Page::slotptr(page, idx)->_off = nxt;
             if (!(Page::slotptr(page, idx)->_dead = Page::slotptr(_frame, cnt)->_dead)) {
                 page->_act++;
             }
-            Page::slotptr(page, idx)->_tod = Page::slotptr(_frame, cnt)->_tod;
-            Page::slotptr(page, idx)->_off = nxt;
         }
     
         page->_min = nxt;
         page->_cnt = idx;
     
         // see if page has enough space now, or does it need splitting?
-        if (page->_min >= (idx+1) * sizeof(Slot) + sizeof(*page) + amt + 1) {
+        if (page->_min >= (idx+1) * sizeof(Slot) + sizeof(*page) + keyLen + 1 + valLen + 1) {
             return newslot;
         }
     
@@ -514,6 +527,7 @@ namespace mongo {
 
         uint nxt = _mgr->getPageSize();
         PageNo left;
+        uchar value[IdLength];
     
         //  Obtain an empty page to use, and copy the current
         //  root contents into it, e.g. lower keys
@@ -526,33 +540,34 @@ namespace mongo {
     
         memset(root->_page+1, 0, _mgr->getPageSize() - sizeof(*root->_page));
     
-        // insert lower keys page fence key on newroot page as first key
-    
+        // insert fence key of page with smaller keys as first key of new root page
+        nxt -= IdLength + 1;
+        BLTVal::putPageNo( value, left );
+        ((uchar *)root->_page)[nxt] = IdLength;
+        memcpy( (uchar *)root->_page + nxt + 1, value, IdLength );
+
         nxt -= *leftKey + 1;
         memcpy( (uchar *)root->_page + nxt, leftKey, *leftKey + 1 );
-
-        Page::slotptr(root->_page, 1 )->_id = left;
         Page::slotptr(root->_page, 1)->_off = nxt;
         
-        // insert stopper key on newroot page
-        // and increase the root height
-    
-        nxt -= 3;
+        // insert stopper key on new root page and increase the root height
+        nxt -= 3 + IdLength + 1;
         ((uchar *)root->_page)[nxt] = 2;
         ((uchar *)root->_page)[nxt+1] = 0xff;
         ((uchar *)root->_page)[nxt+2] = 0xff;
 
-        Page::slotptr(root->_page, 2)->_id = pageNo2;
+        BLTVal::putPageNo( value, pageNo2 );
+        ((uchar *)root->_page)[nxt+3] = IdLength;
+        memcpy( (uchar*)root->_page + nxt + 4, value, IdLength );
         Page::slotptr(root->_page, 2)->_off = nxt;
     
-        root->_page->_right, 0;
+        root->_page->_right = 0;
         root->_page->_min = nxt;        // reset lowest used offset and key count
         root->_page->_cnt = 2;
         root->_page->_act = 2;
         root->_page->_level++;
     
         // release and unpin root
-    
         _mgr->unlockPage( LockWrite, root->_latch, _thread );
         _mgr->unpinLatch( root->_latch, _thread );
         _mgr->unpinPoolEntry( root->_pool, _thread );
@@ -580,33 +595,29 @@ namespace mongo {
         uint nxt = _mgr->getPageSize();
         uint level = set->_page->_level;
 
-        BLTKey* key = NULL;
+        BLTKey* key( NULL );
+        BLTVal* val( NULL );
    
         while (cnt++ < max) {
+            val = Page::valptr( set->_page, cnt );
+            nxt -= val->_len + 1;
+            ((uchar *)_frame)[nxt] = val->_len;
+            memcpy ((uchar *)_frame + nxt + 1, val->_value, val->_len);
+
             key = Page::keyptr(set->_page, cnt);
             nxt -= key->_len + 1;
-
             memcpy( (uchar *)_frame + nxt, key, key->_len + 1 );
-            //memcpy( Page::slotptr(_frame,++idx)->_id, Page::slotptr(set->_page,cnt)->_id, IdLength );
-            Page::slotptr(_frame,++idx)->_id = Page::slotptr(set->_page,cnt)->_id;
+
+            Page::slotptr(_frame, ++idx)->_off = nxt;
 
             if (!(Page::slotptr(_frame, idx)->_dead = Page::slotptr(set->_page, cnt)->_dead)) {
                 _frame->_act++;
             }
 
-            Page::slotptr(_frame, idx)->_tod = Page::slotptr(set->_page, cnt)->_tod;
-            Page::slotptr(_frame, idx)->_off = nxt;
         }
     
         // remember existing fence key for new page to the right
-		if (key) {
-        	memcpy( rightKey, key, key->_len + 1 );
-		}
-		else {
-			return BLTERR_struct;
-		}
-    
-        uassert( -1, "NULL == _frame", NULL != _frame );
+        memcpy( rightKey, key, key->_len + 1 );
 
         _frame->_bits = _mgr->getPageBits();
         _frame->_min = nxt;
@@ -615,11 +626,10 @@ namespace mongo {
     
         // link right node
         if (set->_pageNo > ROOT_page) {
-            //memcpy( _frame->_right, set->_page->_right, IdLength );
-             _frame->_right = set->_page->_right;
+            _frame->_right = set->_page->_right;
         }
     
-        // get new free page and write higher keys to it.
+        // get new free page and write higher keys to it
         if (!(right->_pageNo = _mgr->newPage( _frame, _thread ))) {
             return _err;
         }
@@ -635,19 +645,17 @@ namespace mongo {
     
         // assemble page of smaller keys
         while (cnt++ < max / 2) {
-            key = Page::keyptr(_frame, cnt);
 
-            uassert( -1, "NULL == key", NULL != key );
+            val = Page::valptr( _frame, cnt );
+            nxt -= val->_len + 1;
+            ((uchar *)set->_page)[nxt] = val->_len;
+            memcpy( (uchar *)set->_page + nxt + 1, val->_value, val->_len );
 
+            key = Page::keyptr( _frame, cnt );
             nxt -= key->_len + 1;
-
             memcpy( (uchar *)set->_page + nxt, key, key->_len + 1 );
-            //memcpy( Page::slotptr(set->_page, ++idx)->_id, Page::slotptr(_frame,cnt)->_id, IdLength );
-            Page::slotptr(set->_page, ++idx)->_id = Page::slotptr(_frame,cnt)->_id;
 
-            Page::slotptr(set->_page, idx)->_tod = Page::slotptr(_frame, cnt)->_tod;
-            Page::slotptr(set->_page, idx)->_off = nxt;
-
+            Page::slotptr( set->_page, idx )->_off = nxt;
             set->_page->_act++;
         }
     
@@ -670,12 +678,12 @@ namespace mongo {
         _mgr->unlockPage( LockWrite, set->_latch, _thread );
     
         // insert new fence for reformulated left block of smaller keys
-        if (insertKey( fenceKey+1, *fenceKey, level+1, set->_pageNo, time(NULL))) {
+        if (insertKeyVal( fenceKey+1, *fenceKey, set->_pageNo, level+1 )) {
             return _err;
         }
     
         // switch fence for right block of larger keys to new right page
-        if (insertKey( rightKey+1, *rightKey, level+1, right->_pageNo, time(NULL))) {
+        if (insertKeyVal( rightKey+1, *rightKey, right->_pageNo, level+1 )) {
             return _err;
         }
     
@@ -684,19 +692,20 @@ namespace mongo {
         _mgr->unpinPoolEntry( set->_pool, _thread );
         _mgr->unlockPage( LockParent, right->_latch, _thread );
         _mgr->unpinLatch( right->_latch, _thread );
+
         return BLTERR_ok;
     }
 
     #define INSERT_TRACE    false
 
     /**
-    *  Insert new key into the btree at given level.
+    *  Insert new (key,val) into the btree
     */
-    BLTERR BLTree::insertKey( const uchar* inputKey,
-                              uint inputKeyLen,
-                              uint level,
-                              DocId id,
-                              uint tod )
+    BLTERR BLTree::insertKeyVal( const uchar* inputKey,
+                                 uint inputKeyLen,
+                                 const uchar* val,
+                                 uint valLen,
+                                 uint level )
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
@@ -705,6 +714,7 @@ namespace mongo {
         PageSet set[1];
         uint slot;
         BLTKey* key;
+        int reuse = 0;
     
         while (true) {
 
@@ -732,34 +742,50 @@ namespace mongo {
             }
 
             // if key already exists, update id and return
-            if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
+            if ( (reuse = !BLTKey::keycmp( key, inputKey, inputKeyLen )) ) {
 
-                Slot* slotPtr = Page::slotptr( set->_page, slot );
-                if (slotPtr->_dead) set->_page->_act++;
-                slotPtr->_dead = 0;
-                slotPtr->_tod = tod;
-                slotPtr->_id = id;
-
-                _mgr->unlockPage( LockWrite, set->_latch, _thread );
-                _mgr->unpinLatch( set->_latch, _thread );
-                _mgr->unpinPoolEntry( set->_pool, _thread );
-                return BLTERR_ok;
+                BLTVal* val = Page::valptr( set->_page, slot );
+                if (val) {
+                    Slot* slotPtr = Page::slotptr( set->_page, slot );
+                    if (slotPtr->_dead) set->_page->_act++;
+                    slotPtr->_dead = 0;
+                    val->_len = valLen;
+                    memcpy( val->_value, val, valLen );
+                 
+                    _mgr->unlockPage( LockWrite, set->_latch, _thread );
+                    _mgr->unpinLatch( set->_latch, _thread );
+                    _mgr->unpinPoolEntry( set->_pool, _thread );
+                    return BLTERR_ok;
+                }
+                else {
+                    Slot* slotPtr = Page::slotptr( set->_page, slot );
+                    if (!slotPtr->_dead) set->_page->_act++;
+                    slotPtr->_dead = 1;
+                    set->_page->_dirty = 1;
+                }
             }
     
             // check if page has enough space
-            if ((slot = cleanPage( set->_page, inputKeyLen, slot)) ) break;
+            if ((slot = cleanPage( set->_page, inputKeyLen, valLen, slot)) ) break;
             if (splitPage( set )) return _err;
         }
     
-        // calculate next available slot and copy key into page: we backup by
-        // inputKeyLen + 1, write one byte of length and inputKeyLen bytes of key.
-        // The key storage grows downward in the page, the slot storage upward.
-        // page format:
-        //                                           ___ page->_min
-        //                                          v
-        //    [ slot|slot|..|slot| ...free-space... |len,key|..|len,key|len,key]
+        // calculate next available slot and copy key and value into page. backup by
+        // len + 1, write one byte of length and then len bytes of key or value.
+        // The key storage grows from high to low addresses on the page, the slot
+        // storage grows from low to high addresses.  Page format:
         //
-        set->_page->_min -= inputKeyLen + 1;                    // reset lowest used offset
+        //                                  page->_min
+        //                                  v
+        //    [ slot|slot| .. FREE SPACE .. |len,key:len,val|len,key:len,val]
+        //    ^                                                             ^
+        //    low address                                        high address
+        //
+        set->_page->_min -= valLen + 1;         // reset lowest used offset
+        ((uchar*)set->_page)[set->_page->_min] = valLen;
+        memcpy( (uchar*)set->_page + set->_page->_min + 1, val, valLen );
+
+        set->_page->_min -= inputKeyLen + 1;    // reset lowest used offset
         ((uchar *)set->_page)[set->_page->_min] = inputKeyLen;  // 256 byte max length
         memcpy( (uchar *)set->_page + set->_page->_min + 1, inputKey, inputKeyLen );
 
@@ -770,7 +796,7 @@ namespace mongo {
         }
     
         // if no emtpy slot: add to end, bump the slot count
-        if (idx == set->_page->_cnt ) {
+        if (!reuse && idx == set->_page->_cnt ) {
             idx++;
             set->_page->_cnt++;
         }
@@ -778,21 +804,17 @@ namespace mongo {
         // bump the count of active keys
         set->_page->_act++;
     
-        //
         // linear insertion algorithm: move all the slot pointers down by one
         // until we reach either the previous discovered empty slot or the end
         // of the slot array.
-        //
+
         for (; idx > slot; --idx) {
             *Page::slotptr(set->_page, idx) = *Page::slotptr(set->_page, idx - 1);
         }
     
         // insert new key data into vacant slot
         Slot* slotPtr = Page::slotptr(set->_page, slot);
-
-        slotPtr->_id = id;
         slotPtr->_off  = set->_page->_min;
-        slotPtr->_tod  = tod;
         slotPtr->_dead = 0;
     
         // unlock and return
@@ -802,132 +824,30 @@ namespace mongo {
         return BLTERR_ok;
     }
     
-    /**
-    *  Insert new (key,doc) into the btree
-    */
-    BLTERR BLTree::insertDoc( const uchar* inputKey,
-                              uint inputKeyLen,
-                              const char* doc,
-                              DocId id,
-                              uint tod )
+    BLTERR BLTree::insertKeyVal( const uchar* inputKey,
+                                 uint inputKeyLen,
+                                 PageNo pageNo,
+                                 uint level )
     {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
-
         uassert( -1, "NULL == inputKey", NULL != inputKey );
 
-        PageSet set[1];
-        uint slot;
-        BLTKey* key;
-    
-        while (true) {
-
-            // find the page (returned in 'set') and slot within page for this key
-            slot = _mgr->loadPage( set, inputKey, inputKeyLen, 0, LockWrite, _thread );
-
-            if (INSERT_TRACE) {
-                __OSS__( "(pageNo,slot) = (" << set->_pageNo << ',' << slot << ')' );
-                Logger::logDebug( _thread, __ss__, __LOC__ );
-            }
-
-            if (slot) {
-                key = Page::keyptr(set->_page, slot);
-            }
-            else {
-                if (!_err) _err = BLTERR_ovflw;
-                return _err;
-            }
-
-            uassert( -1, "NULL == key", NULL != key );
-    
-            if (INSERT_TRACE) {
-                __OSS__( "key = " << key->toString() );
-                Logger::logDebug( _thread, __ss__, __LOC__ );
-            }
-
-            // if key already exists, update id and return
-            if (!BLTKey::keycmp( key, inputKey, inputKeyLen )) {
-
-                Slot* slotPtr = Page::slotptr( set->_page, slot );
-                if (slotPtr->_dead) set->_page->_act++;
-                slotPtr->_dead = 0;
-                slotPtr->_tod = tod;
-                slotPtr->_id = id;
-                
-                _mgr->unlockPage( LockWrite, set->_latch, _thread );
-                _mgr->unpinLatch( set->_latch, _thread );
-                _mgr->unpinPoolEntry( set->_pool, _thread );
-                return BLTERR_ok;
-            }
-    
-            // check if page has enough space
-            if ((slot = cleanPage( set->_page, inputKeyLen, slot)) ) break;
-            if (splitPage( set )) return _err;
-        }
-    
-        // calculate next available slot and copy key into page: we backup by
-        // inputKeyLen + 1, write one byte of length and inputKeyLen bytes of key.
-        // The key storage grows downward in the page, the slot storage upward.
-        // page format:
-        //                                           ___ page->_min
-        //                                          v
-        //    [ slot|slot|..|slot| ...free-space... |len,key|..|len,key|len,key]
-        //
-        set->_page->_min -= inputKeyLen + 1;                    // reset lowest used offset
-        ((uchar *)set->_page)[set->_page->_min] = inputKeyLen;  // 256 byte max length
-        memcpy( (uchar *)set->_page + set->_page->_min + 1, inputKey, inputKeyLen );
-
-        // check for an empty slot
-        uint idx;
-        for (idx = slot; idx < set->_page->_cnt; idx++) {
-          if (Page::slotptr(set->_page, idx)->_dead ) break;
-        }
-    
-        // if no emtpy slot: add to end, bump the slot count
-        if (idx == set->_page->_cnt ) {
-            idx++;
-            set->_page->_cnt++;
-        }
-
-        // bump the count of active keys
-        set->_page->_act++;
-    
-        //
-        // linear insertion algorithm: move all the slot pointers down by one
-        // until we reach either the previous discovered empty slot or the end
-        // of the slot array.
-        //
-        for (; idx > slot; --idx) {
-            *Page::slotptr(set->_page, idx) = *Page::slotptr(set->_page, idx - 1);
-        }
-    
-        // insert new key data into vacant slot
-        Slot* slotPtr = Page::slotptr(set->_page, slot);
-
-        slotPtr->_id = id;
-
-        slotPtr->_off  = set->_page->_min;
-        slotPtr->_tod  = tod;
-        slotPtr->_dead = 0;
-    
-        // unlock and return
-        _mgr->unlockPage( LockWrite, set->_latch, _thread );
-        _mgr->unpinLatch( set->_latch, _thread );
-        _mgr->unpinPoolEntry( set->_pool, _thread );
-        return BLTERR_ok;
+        uchar value[IdLength];
+        BLTVal::putPageNo( value, pageNo );
+        return insertKeyVal( inputKey, inputKeyLen, value, IdLength, level );
     }
-    
+
     /**
     *  cache page of keys into cursor and return starting slot for given key
     */
-    uint BLTree::startKey( const uchar* key, uint keylen ) {
+    uint BLTree::startKey( const uchar* key, uint keyLen ) {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
-
         uassert( -1, "NULL == key", NULL != key );
 
         PageSet set[1];
     
         // cache page for retrieval
-        uint slot = _mgr->loadPage( set, key, keylen, 0, LockRead, _thread );
+        uint slot = _mgr->loadPage( set, key, keyLen, 0, LockRead, _thread );
         if (slot) {
             memcpy( _cursor, set->_page, _mgr->getPageSize() );
         }
@@ -998,33 +918,35 @@ namespace mongo {
     void BLTree::latchAudit() {
         if (BLTINDEX_TRACE) Logger::logDebug( _thread, "", __LOC__ );
 
-        if (*(uint *)(_mgr->getLatchMgr()->_lock)) {
+        //posix_fadvise( _mgr->getFD(), 0, 0, POSIX_FADV_SEQUENTIAL );
+
+        if (*(ushort *)(_mgr->getLatchMgr()->_lock)) {
             Logger::logDebug( _thread, "Alloc page locked", __LOC__ );
         }
-        *(uint *)(_mgr->getLatchMgr()->_lock) = 0;
+        *(ushort *)(_mgr->getLatchMgr()->_lock) = 0;
     
         for (ushort idx = 1; idx <= _mgr->getLatchMgr()->_latchDeployed; idx++ ) {
 
             LatchSet* latchSet = &_mgr->getLatchMgr()->_latchSets[ idx ];
             PageNo pageNo = latchSet->_pageNo;
 
-            if (*(uint *)latchSet->_readwr ) {
+            if (*latchSet->_readwr->_rin & MASK) {
                 __OSS__( "latchset " << idx << " rw locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
-            *(uint *)latchSet->_readwr = 0;
+            memset( (ushort *)latchSet->_readwr, 0, sizeof( RWLock ) );
     
-            if (*(uint *)latchSet->_access ) {
+            if (*latchSet->_access->_rin & MASK) {
                 __OSS__( "latchset " << idx << " access locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
-            *(uint *)latchSet->_access = 0;
+            memset( (ushort *)latchSet->_access, 0, sizeof( RWLock ) );
     
-            if (*(uint *)latchSet->_parent ) {
+            if (*latchSet->_parent->_rin & MASK) {
                 __OSS__( "latchset " << idx << " parent locked for page " << pageNo );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
-            *(uint *)latchSet->_parent = 0;
+            memset( (ushort *)latchSet->_parent, 0, sizeof( RWLock ) );
     
             if (latchSet->_pin ) {
                 __OSS__( "latchset " << idx << " pinned for page " << pageNo );
@@ -1034,11 +956,11 @@ namespace mongo {
         }
     
         for (ushort hashidx = 0; hashidx < _mgr->getLatchMgr()->_latchHashSize; hashidx++ ) {
-            if (*(uint *)(_mgr->getLatchMgr()->_table[hashidx]._latch) ) {
+            if (*(ushort *)(_mgr->getLatchMgr()->_table[hashidx]._latch) ) {
                 __OSS__( "hash entry " << hashidx << " locked" );
                 Logger::logDebug( _thread, __ss__, __LOC__ );
             }
-            *(uint *)(_mgr->getLatchMgr()->_table[hashidx]._latch) = 0;
+            *(ushort *)(_mgr->getLatchMgr()->_table[hashidx]._latch) = 0;
     
             uint idx = _mgr->getLatchMgr()->_table[hashidx]._slot;
             if (idx) {
@@ -1047,11 +969,11 @@ namespace mongo {
                     latchSet = &_mgr->getLatchMgr()->_latchSets[ idx ];
                     PageNo pageNo = latchSet->_pageNo;
 
-                    if (*(uint *)latchSet->_busy ) {
+                    if (*(ushort *)latchSet->_busy ) {
                         __OSS__( "latchset " << idx << " busy locked for page " << pageNo );
                         Logger::logDebug( _thread, __ss__, __LOC__ );
                     }
-                    *(uint *)latchSet->_busy = 0;
+                    *(ushort *)latchSet->_busy = 0;
                     if (latchSet->_hash != hashidx ) {
                         __OSS__( "latchset " << idx << " wrong hashidx " );
                         Logger::logDebug( _thread, __ss__, __LOC__ );

@@ -48,6 +48,7 @@
 
 #include "common.h"
 #include "bltkey.h"
+#include "bltval.h"
 
 #include <iostream>
 
@@ -94,8 +95,7 @@ namespace mongo {
     *
     *  If BLT_maxbits is 15 or less, you can save 4 bytes
     *  for each key stored by making the first two uints
-    *  into ushorts.  You can also save 4 bytes by removing
-    *  the tod field from the key.
+    *  into ushorts.
     * 
     *  Keys are marked dead, but remain on the page until
     *  it cleanup is called. The fence key (highest key) for
@@ -104,8 +104,6 @@ namespace mongo {
     struct Slot {
         uint32_t _off:BLT_maxbits;  // page offset for key start
         uint32_t _dead:1;           // set for deleted key
-        uint32_t _tod;              // time-stamp for key
-        DiskLoc  _id;               // docid  associated with key
 
         friend std::ostream& operator<<( std::ostream& os, const Slot& slot );
     };
@@ -125,6 +123,10 @@ namespace mongo {
             return ((BLTKey*)((uchar*)page + slotptr( page, slot )->_off));
         }
 
+        static BLTVal* valptr( Page* page, uint slot ) {
+            return (BLTVal*)(keyptr( page, slot )->_key + keyptr( page, slot )->_len);
+        }
+
         friend std::ostream& operator<<( std::ostream& os, const Page& page );
 
     public:
@@ -136,7 +138,6 @@ namespace mongo {
         uchar _level:6;           // level of page
         uchar _kill:1;            // page is being deleted
         uchar _dirty:1;           // page has deleted keys
-        //uchar _right[IdLength];   // page number to right
         PageNo _right;
     };
     

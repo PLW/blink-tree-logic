@@ -136,7 +136,7 @@ namespace mongo {
  *
  *    The page header includes
  *
- *      uint32_t _cnt;              // count of keys in page
+ *         uint32_t _cnt;              // count of keys in page
  *         uint32_t _act;              // count of active keys
  *         uint32_t _min;              // next key offset
  *         uchar _bits:7;              // page size in bits, only really need 5 bits here
@@ -151,7 +151,6 @@ namespace mongo {
  *
  *         uint32_t _off:BLT_maxbits;  // page offset for key start
  *         uint32_t _dead:1;           // set for deleted key
- *         uint32_t _tod;              // timestamp of key insertion
  *         uchar    _id[IdLength];     // id associated with key
  *
  *    When a key insertion determines that the gap between the highest
@@ -273,14 +272,14 @@ namespace mongo {
         *  @param set  -  
         */
         void lockPage( BLTLockMode lockMode, LatchSet* set, const char* thread );
-        
+
         /**
         *  Remove write, read, or parent lock on requested page.
         *  @param lockMode  -  
         *  @param set  -  
         */
         void unlockPage( BLTLockMode lockMode, LatchSet* set, const char* thread );
-        
+
         /**
         *  Allocate a new page and write given page into it.
         *  @param page  -  
@@ -369,7 +368,7 @@ namespace mongo {
         ushort _poolMask;           // total number of pages in mmap segment - 1
         ushort _hashSize;           // size of hash table for pool entries
         volatile uint _evicted;     // last evicted hash table slot
-        int _err;                    // most recent error
+        int _err;                   // most recent error
 
         /*
         *  _hashSize contiguously allocated ushort

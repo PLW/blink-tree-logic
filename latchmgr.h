@@ -84,6 +84,18 @@ namespace mongo {
 	*       SpinLatch _parent[1];       // posting of fence key in parent
     */
 
+    // RWLock 
+    #define PHID    0x1
+    #define PRES    0x2
+    #define MASK    0x3
+    #define RINC    0x4
+
+    // SpinLatch
+    #define XCL     1       // 001
+    #define PEND    2       // 010
+    #define BOTH    3       // 011
+    #define SHARE   4       // 100
+
 	typedef enum {
 	    LockAccess  = 0,
 	    LockDelete  = 1,
@@ -91,7 +103,7 @@ namespace mongo {
 	    LockWrite   = 3,
 	    LockParent  = 4
 	} BLTLockMode;
-	
+
 	class SpinLatch {
     public:
         static uint spinReadLock( SpinLatch* latch, const char* thread );
@@ -106,11 +118,51 @@ namespace mongo {
         SpinLatch() : _exclusive(0), _pending(0), _share(0) { _mutex[0] = 0; }
 
     public:
-	    volatile uchar _mutex[1];
-	    volatile uchar _exclusive:1;     // set for write access
-	    volatile uchar _pending:1;
-	    volatile uint16_t _share;        // count of read accessors
+	    volatile uchar _mutex[1];       // protects consistency of next three variables
+	    volatile uchar _exclusive:1;    // set for write access
+	    volatile uchar _pending:1;      //
+	    volatile uint16_t _share;       // count of read accessors
+                                        // grant write latch when share==0;
 	};
+
+	class SpinLatchV2 {
+    public:
+        void spinReadLock( SpinLatchV2* latch );
+        void spinReleaseRead( SpinLatchV2* latch );
+        int  spinTryWrite( SpinLatchV2* latch );
+        void spinWriteLock( SpinLatchV2* latch );
+        void spinReleaseWrite( SpinLatchV2* latch );
+
+        friend std::ostream& operator<<( std::ostream& os, const SpinLatchV2& latch );
+        std::string toString() const;
+
+        SpinLatchV2() : _exclusive(0), _pending(0), _share(0) {}
+
+    public:
+	    volatile ushort _exclusive:1;   // set for write access
+	    volatile ushort _pending:1;     //
+	    volatile ushort _share:14;      // count of read accessors
+                                        // grant write latch when share==0;
+	};
+
+    class RWLock {
+    public:
+        static void writeLock( RWLock* lock, const char* thread );
+        static void writeRelease( RWLock* lock, const char* thread );
+        static void readLock( RWLock* lock, const char* thread );
+        static void readRelease( RWLock* lock, const char* thread );
+
+        friend std::ostream& operator<<( std::ostream& os, const RWLock& lock );
+        std::string toString() const;
+
+        RWLock() { _rin[0] = 0; _rout[0] = 0; _ticket[0] = 0; _serving[0] = 0; }
+
+    public:
+        ushort _rin[1];
+        ushort _rout[1];
+        ushort _ticket[1];
+        ushort _serving[1];
+    };
 
 	struct HashEntry {
 	    SpinLatch _latch[1];
@@ -118,10 +170,18 @@ namespace mongo {
 	};
 	
 	struct LatchSet {
-	    SpinLatch _access[1];       // access intent/page delete
-	    SpinLatch _readwr[1];       // read/write page lock
-	    SpinLatch _parent[1];       // posting of fence key in parent
+
+        // alternatively:
+	    //SpinLatch _access[1];     // access intent/page delete
+	    //SpinLatch _readwr[1];     // read/write page lock
+	    //SpinLatch _parent[1];     // posting of fence key in parent
+
+	    RWLock _access[1];          // access intent/page delete
+	    RWLock _readwr[1];          // read/write page lock
+	    RWLock _parent[1];          // posting of fence key in parent
+
 	    SpinLatch _busy[1];         // slot is being moved between chains
+
 	    volatile uint16_t _next;    // next entry in hash table chain
 	    volatile uint16_t _prev;    // prev entry in hash table chain
 	    volatile uint16_t _pin;     // pin count = number of threads using the latch <- XX check this
@@ -155,9 +215,8 @@ namespace mongo {
         LatchSet* pinLatch( PageNo pageNo, const char* thread );
 
     public:
-	    Page _alloc[2];             // next and free page numbers in right ptr
-									//   _latchmgr->_alloc == size of file / page size
-									//   _latchmgr->_alloc[1] == free pageNo
+	    Page _alloc[1];             // next page in right ptr
+        PageNo _chain;              // head of free pages chain
 	    SpinLatch _lock[1];         // allocation area latch
 	    ushort _latchDeployed;      // highest number of latch entries deployed
 	    ushort _nlatchPage;         // number of latch pages at BT_latch
@@ -170,9 +229,3 @@ namespace mongo {
 
 }   // namespace mongo
 
-
-		/*
- 			Page _header[1];
-		 	uchar _next[IdLength];
-		 	uchar _free[IdLength];
- 		*/

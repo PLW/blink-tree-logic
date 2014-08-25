@@ -1,4 +1,4 @@
-//@file key.h
+//@file bltval.h
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -36,41 +36,40 @@
 namespace mongo {
 
     /**
-    *  The key structure occupies space at the upper end of each
+    *  The Val structure occupies space at the upper end of each
     *  page.  It's a length byte followed by the value bytes.
+    *  Proxy for a general BSON value.
     */
-    class BLTKey {
+    class BLTVal {
     public:
 
-        /**
-        *  compare two keys,
-        */
-        static int keycmp( BLTKey* key1, const uchar* key2, uint len2 ) {
-            uint len1 = key1->_len;
-            int ans = memcmp(key1->_key, key2, len1 > len2 ? len2 : len1);
-            return (ans ? ans : (len1>len2) ? 1 : (len1<len2) ? -1 : 0);
+        static PageNo getPageNo( const uchar* src ) {
+            PageNo p = 0;
+            for (int i=0; i<IdLength; ++i) {
+                p <<= 8;
+                p |= *src++;
+            }
+            return p;
         }
 
-        /**
-        *  compare two keys,
-        */
-        static int keycmp(BLTKey* key1, BLTKey* key2) {
-            uint len1 = key1->_len;
-            uint len2 = key2->_len;
-            int ans = memcmp(key1->_key, key2->_key, len1 > len2 ? len2 : len1);
-            return (ans ? ans : (len1>len2) ? 1 : (len1<len2) ? -1 : 0);
+        static void putPageNo( uchar* dst, PageNo pageNo ) {
+            PageNo p = pageNo;
+            for (int i=IdLength-1; i>=0; --i) {
+                dst[i] = (uchar)p;
+                p >>= 8;
+            }
         }
 
         std::string toString() const {
             char buf[ _len + 1 ];
-            strncpy( buf, (const char *)_key, _len );
+            strncpy( buf, (const char *)_value, _len );
             buf[ _len ] = 0;
             return std::string( buf );
         }
 
         // data
         uchar _len;
-        uchar _key[0];
+        uchar _value[0];
 
     };
 

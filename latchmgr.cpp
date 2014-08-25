@@ -68,10 +68,61 @@
 
 namespace mongo {
 
-    // SpinLatch
 
     #define LATCH_TRACE     false
 	#define SPIN_LIMIT		200000
+
+    //
+    // RWLock
+    //
+
+    void RWLock::writeLock( RWLock* lock, const char* thread ) {
+        if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
+		uassert( -1, "NULL == lock", NULL != lock );
+
+        // wait for our _ticket to come up
+        ushort tix = __sync_fetch_and_add( lock->_ticket, 1 );
+        while (tix != lock->_serving[0]) {
+            sched_yield();
+        }
+
+        ushort w = PRES | (tix & PHID);
+        ushort r = __sync_fetch_and_add (lock->_rin, w);
+        while (r != *lock->_rout) {
+            sched_yield();
+        }
+    }
+
+    void RWLock::writeRelease( RWLock* lock, const char* thread ) {
+        if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
+		uassert( -1, "NULL == lock", NULL != lock );
+
+        __sync_fetch_and_and( lock->_rin, ~MASK );
+        lock->_serving[0]++;
+    }
+
+    void RWLock::readLock( RWLock* lock, const char* thread ) {
+        if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
+		uassert( -1, "NULL == lock", NULL != lock );
+
+        ushort w = __sync_fetch_and_add( lock->_rin, RINC ) & MASK;
+        if (w) {
+            while (w == (*lock->_rin & MASK)) {
+                sched_yield ();
+            }   
+        }
+    }
+
+    void RWLock::readRelease( RWLock* lock, const char* thread ) {
+        if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
+		uassert( -1, "NULL == lock", NULL != lock );
+
+        __sync_fetch_and_add( lock->_rout, RINC );
+    }
+
+    // 
+    // SpinLatch
+    //
 
     /**
     *  wait until write lock mode is clear,
@@ -79,7 +130,6 @@ namespace mongo {
     */
     uint SpinLatch::spinReadLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-
 		uassert( -1, "NULL == latch", NULL != latch );
 
         ushort prev;
@@ -115,7 +165,6 @@ namespace mongo {
     */
     uint SpinLatch::spinWriteLock( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-
 		uassert( -1, "NULL == latch", NULL != latch );
 
         ushort prev;
@@ -155,7 +204,6 @@ namespace mongo {
     */
     int SpinLatch::spinTryWrite( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-
 		uassert( -1, "NULL == latch", NULL != latch );
 
         if (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
@@ -177,7 +225,6 @@ namespace mongo {
     */
     void SpinLatch::spinReleaseWrite( SpinLatch* latch, const char* thread ) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-
 		uassert( -1, "NULL == latch", NULL != latch );
 
         while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
@@ -192,7 +239,6 @@ namespace mongo {
     */
     void SpinLatch::spinReleaseRead( SpinLatch* latch, const char* thread) {
         if (LATCHMGR_TRACE) Logger::logDebug( thread, "", __LOC__ );
-
 		uassert( -1, "NULL == latch", NULL != latch );
 
         while (__sync_lock_test_and_set( (unsigned char*)latch->_mutex, 1 )) {
@@ -202,12 +248,108 @@ namespace mongo {
         *latch->_mutex = 0;
     }
 
+    //
+    // SpinLatchV2
+    //
+
+    /**
+    *  wait until write lock mode is clear
+    *  and add 1 to the share count
+    */
+    void SpinLatchV2::spinReadLock( SpinLatchV2* latch ) {
+        ushort prev;
+
+        do {
+            prev = __sync_fetch_and_add( (ushort *)latch, SHARE );
+
+            //  see if exclusive request is granted or pending
+            if (!(prev & BOTH)) return;
+
+            prev = __sync_fetch_and_add( (ushort *)latch, -SHARE );
+
+        } while (sched_yield(), 1);
+    }
+
+    /**
+    *  wait for other read and write latches to relinquish
+    */
+    void SpinLatchV2::spinWriteLock( SpinLatchV2* latch ) {
+        ushort prev;
+
+        do {
+            prev = __sync_fetch_and_or( (ushort *)latch, PEND | XCL );
+            if ( !(prev & XCL) ) {
+                if (!(prev & ~BOTH)) return;
+            }
+            else {
+                __sync_fetch_and_and( (ushort *)latch, ~XCL );
+            }
+        } while (sched_yield(), 1);
+    }
+
+    /**
+    *  try to obtain write lock
+    *  return 1 if obtained, 0 otherwise
+    */
+    int SpinLatchV2::spinTryWrite( SpinLatchV2* latch ) {
+
+        ushort prev = __sync_fetch_and_or((ushort *)latch, XCL);
+
+        //  take write access if all bits are clear
+        if (!(prev & XCL)) {
+            if (!(prev & ~BOTH)) {
+                return 1;
+            }
+            else {
+                __sync_fetch_and_and( (ushort *)latch, ~XCL );
+            }
+        }
+        return 0;
+    }
+
+    /**
+    *  clear write mode
+    */
+    void SpinLatchV2::spinReleaseWrite( SpinLatchV2* latch ) {
+        __sync_fetch_and_and((ushort *)latch, ~BOTH);
+    }
+
+    /**
+    *  decrement reader count
+    */
+    void SpinLatchV2::spinReleaseRead( SpinLatchV2* latch ) {
+        __sync_fetch_and_add((ushort *)latch, -SHARE);
+    }
+
+    //
+    // debug output
+    //
+
+    std::string RWLock::toString() const {
+        std::ostringstream oss;
+        oss << "RWLock["
+            << " rin = " << _rin[0]
+            << ", rout = " << _rout[0]
+            << ", ticket = " << _ticket[0]
+            << ", serving = " << _serving[0] << "]";
+        return oss.str();
+    }
+
     std::string SpinLatch::toString() const {
         std::ostringstream oss;
         oss << "SpinLatch["
             << " mutex = " << (bool)_mutex[0]
             << ", exclusive = " << (bool)_exclusive
-            << ", pending: = " << (bool)_pending
+            << ", pending = " << (bool)_pending
+            << ", share = " << _share << "]";
+        return oss.str();
+    }
+
+    std::string SpinLatchV2::toString() const {
+        std::ostringstream oss;
+        oss << "SpinLatchV2["
+            << "exclusive = " << (bool)_exclusive
+            << ", pending = " << (bool)_pending
             << ", share = " << _share << "]";
         return oss.str();
     }
@@ -227,7 +369,15 @@ namespace mongo {
         return oss.str();
     }
  
+    std::ostream& operator<<( std::ostream& os, const RWLock& lock ) {
+        return os << lock.toString();
+    }
+
     std::ostream& operator<<( std::ostream& os, const SpinLatch& latch ) {
+        return os << latch.toString();
+    }
+
+    std::ostream& operator<<( std::ostream& os, const SpinLatchV2& latch ) {
         return os << latch.toString();
     }
 
@@ -235,7 +385,9 @@ namespace mongo {
         return os << set.toString();
     }
  
+    //
     // LatchMgr
+    //
 
     /**
     *  Add victim to head of hash chain at hashIndex
