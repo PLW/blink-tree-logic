@@ -15,7 +15,7 @@ namespace mongo {
 	    5. (set 3) ParentModification: Exclusive. Change node parent keys. Incompatible ParentModification. 
 	*/
 	
-	enum LockMode {
+	enum BLTLockMode {
 		LockAccess,
 		LockDelete,
 		LockRead,
@@ -26,12 +26,12 @@ namespace mongo {
     //
 	//	definition for phase-fair reader/writer lock implementation
 	//
-	class RWLock {
+	class BLT_RWLock {
     public:
-	    static void WriteLock( RWLock* lock );
-	    static void WriteRelease( RWLock* lock );
-	    static void ReadLock( RWLock* lock );
-	    static void ReadRelease( RWLock* lock );
+	    static void WriteLock( BLT_RWLock* lock );
+	    static void WriteRelease( BLT_RWLock* lock );
+	    static void ReadLock( BLT_RWLock* lock );
+	    static void ReadRelease( BLT_RWLock* lock );
 
     public:
 		ushort rin[1];
@@ -83,9 +83,9 @@ namespace mongo {
 	//
 	class LatchSet {
     public:
-		RWLock readwr[1];		    // read/write page lock
-		RWLock access[1];		    // Access Intent/Page delete
-		RWLock parent[1];		    // Posting of fence key in parent
+		BLT_RWLock readwr[1];		    // read/write page lock
+		BLT_RWLock access[1];		    // Access Intent/Page delete
+		BLT_RWLock parent[1];		    // Posting of fence key in parent
 		SpinLatch busy[1];		    // slot is being moved between chains
 		volatile ushort next;		// next entry in hash table chain
 		volatile ushort prev;		// prev entry in hash table chain

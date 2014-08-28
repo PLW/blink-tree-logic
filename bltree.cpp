@@ -150,7 +150,7 @@ namespace mongo {
 	        mgr->lockpage( LockDelete, child->latch );
 	        mgr->lockpage( LockWrite, child->latch );
 	
-	        if (child->pool = mgr->pinpool( child->page_no) ) {
+	        if ( (child->pool = mgr->pinpool( child->page_no )) ) {
 	            child->page = mgr->page( child->pool, child->page_no);
 	        }
 	        else {
@@ -200,8 +200,8 @@ namespace mongo {
 	            set->page->act--;
 	
 	            // collapse empty slots
-	            while( idx = set->page->cnt - 1 ) {
-	                if( slotptr(set->page, idx)->dead ) {
+	            while ( (idx = set->page->cnt - 1) ) {
+	                if (slotptr(set->page, idx)->dead) {
 	                    *slotptr(set->page, idx) = *slotptr(set->page, idx + 1);
 	                    memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
 	                }
@@ -214,7 +214,7 @@ namespace mongo {
 	
 	    // did we delete a fence key in an upper level?
 	    if (dirty && lvl && set->page->act && fence) {
-	        if( fixfence( set, lvl) ) {
+	        if (fixfence( set, lvl )) {
 	            return (BTERR)err;
 	        }
 	        else {
@@ -253,7 +253,7 @@ namespace mongo {
 	    mgr->lockpage( LockWrite, right->latch );
 	
 	    // pin page contents
-	    if (right->pool = mgr->pinpool( right->page_no )) {
+	    if ( (right->pool = mgr->pinpool( right->page_no )) ) {
 	        right->page = mgr->page( right->pool, right->page_no );
 	    }
 	    else {
@@ -473,9 +473,8 @@ namespace mongo {
 	    uchar value[BtId];
 	    uint lvl = set->page->lvl;
 	    PageSet right[1];
-	    uint prev;
-	    BLTKey* key;
-	    BLTVal* val;
+	    BLTKey* key = NULL;
+	    BLTVal* val = NULL;
 	
 	    // split higher half of keys to 'frame'
 	    memset( frame, 0, mgr->page_size );
@@ -709,7 +708,7 @@ namespace mongo {
 	
 	        cursor_page = right;
 	
-	        if (set->pool = mgr->pinpool( right )) {
+	        if ( (set->pool = mgr->pinpool( right )) ) {
 	            set->page = mgr->page( set->pool, right );
 	        }
 	        else {
@@ -751,22 +750,22 @@ namespace mongo {
 	    for( idx = 1; idx <= mgr->latchmgr->latchdeployed; idx++ ) {
 	        latch = mgr->latchsets + idx;
 	        if (*latch->readwr->rin & MASK) {
-	            fprintf( stderr, "latchset %d rwlocked for page %.8x\n", idx, latch->page_no );
+	            fprintf( stderr, "latchset %d rwlocked for page %.8lx\n", idx, latch->page_no );
 	        }
-	        memset( (ushort *)latch->readwr, 0, sizeof(RWLock) );
+	        memset( (ushort *)latch->readwr, 0, sizeof(BLT_RWLock) );
 	
 	        if (*latch->access->rin & MASK) {
-	            fprintf( stderr, "latchset %d accesslocked for page %.8x\n", idx, latch->page_no );
+	            fprintf( stderr, "latchset %d accesslocked for page %.8lx\n", idx, latch->page_no );
 	        }
-	        memset( (ushort *)latch->access, 0, sizeof(RWLock) );
+	        memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
 	
 	        if (*latch->parent->rin & MASK) {
-	            fprintf( stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no );
+	            fprintf( stderr, "latchset %d parentlocked for page %.8lx\n", idx, latch->page_no );
 	        }
-	        memset( (ushort *)latch->access, 0, sizeof(RWLock) );
+	        memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
 	
 	        if (latch->pin) {
-	            fprintf( stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no );
+	            fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
 	            latch->pin = 0;
 	        }
 	    }
@@ -782,12 +781,12 @@ namespace mongo {
 	            do {
 	                latch = mgr->latchsets + idx;
 	                if (*(ushort *)latch->busy) {
-	                    fprintf( stderr, "latchset %d busylocked for page %.8x\n", idx, latch->page_no );
+	                    fprintf( stderr, "latchset %d busylocked for page %.8lx\n", idx, latch->page_no );
 	                }
 	
 	                *(ushort *)latch->busy = 0;
 	                if (latch->pin ) {
-	                    fprintf( stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no );
+	                    fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
 	                }
 	            } while ( (idx = latch->next) );
 	        }
@@ -805,7 +804,7 @@ namespace mongo {
 	            for( idx = 0; idx++ < frame->cnt - 1; ) {
 	                ptr = keyptr(frame, idx+1);
 	                if (BLTKey::keycmp( keyptr(frame, idx), ptr->key, ptr->len ) >= 0 ) {
-	                    fprintf( stderr, "page %.8x idx %.2x out of order\n", page_no, idx );
+	                    fprintf( stderr, "page %.8lx idx %.2x out of order\n", page_no, idx );
 	                }
 	            }
 	            if( !frame->lvl ) {

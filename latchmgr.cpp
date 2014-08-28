@@ -20,7 +20,7 @@
 	
 namespace mongo {
 	
-	void RWLock::WriteLock( RWLock* lock ) {
+	void BLT_RWLock::WriteLock( BLT_RWLock* lock ) {
 	    ushort w, r;
 		ushort tix = __sync_fetch_and_add( (ushort *)lock->ticket, 1 );
 
@@ -33,19 +33,19 @@ namespace mongo {
 		while( r != *lock->rout ) sched_yield();
 	}
 	
-	void RWLock::WriteRelease( RWLock* lock ) {
+	void BLT_RWLock::WriteRelease( BLT_RWLock* lock ) {
 		__sync_fetch_and_and( (ushort *)lock->rin, ~MASK );
 		lock->serving[0]++;
 	}
 	
-	void RWLock::ReadLock( RWLock* lock ) {
+	void BLT_RWLock::ReadLock( BLT_RWLock* lock ) {
 	    ushort w = __sync_fetch_and_add( (ushort *)lock->rin, RINC ) & MASK;
 		if (w) {
 		  while (w == (*lock->rin & MASK)) sched_yield ();
         }
 	}
 	
-	void RWLock::ReadRelease( RWLock* lock ) {
+	void BLT_RWLock::ReadRelease( BLT_RWLock* lock ) {
 		__sync_fetch_and_add( (ushort *)lock->rout, RINC );
 	}
 	

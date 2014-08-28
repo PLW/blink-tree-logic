@@ -56,10 +56,10 @@ namespace mongo {
         // page interface
         Page* page( PoolEntry* pool, uid page_no );
         uid     newpage( Page* page );
-        void    lockpage( LockMode mode, LatchSet *set );
-        void    unlockpage( LockMode mode, LatchSet *set );
+        void    lockpage( BLTLockMode mode, LatchSet *set );
+        void    unlockpage( BLTLockMode mode, LatchSet *set );
         int     findslot( PageSet* set, uchar* key, uint len );
-        int     loadpage( PageSet* set, uchar* key, uint len, uint lvl, LockMode lock );
+        int     loadpage( PageSet* set, uchar* key, uint len, uint lvl, BLTLockMode lock );
         void    freepage( PageSet* set );
 
         // latch interface

@@ -40,7 +40,7 @@ namespace mongo {
                           uint segsize,
                           uint hashsize )
     {
-	    uint lvl, attr, cacheblk, last, slot, idx;
+	    uint lvl, cacheblk, last;
 	    uint nlatchpage, latchhash;
 	    uchar value[BtId];
 	    LatchMgr* latchmgr;
@@ -263,7 +263,7 @@ namespace mongo {
 	    poolEntry->basepage = page_no & ~poolmask;
 	    poolEntry->pin = CLOCK_bit + 1;
 	
-	    if (slot = hash[idx]) {
+	    if ( (slot = hash[idx]) ) {
 	        node = pool + slot;
 	        poolEntry->hashnext = node;
 	        node->hashprev = poolEntry;
@@ -278,7 +278,6 @@ namespace mongo {
     BTERR BufMgr::mapsegment( PoolEntry* poolEntry, uid page_no ) {
 
 	    off64_t off = (page_no & ~poolmask) << page_bits;
-	    off64_t limit = off + ((poolmask+1) << page_bits);
 	    int flag;
 	
 	    flag = PROT_READ | ( mode == BT_ro ? 0 : PROT_WRITE );
@@ -306,7 +305,7 @@ namespace mongo {
 	
 	    LatchSet* set = latchsets + victim;
 	
-	    if (set->next = latchmgr->table[hashidx].slot) {
+	    if ( (set->next = latchmgr->table[hashidx].slot) ) {
 	        latchsets[set->next].prev = victim;
 	    }
 	
@@ -340,7 +339,7 @@ namespace mongo {
 	        do {
 	            set = latchsets + slot;
 	            if( page_no == set->page_no ) break;
-	        } while( slot = set->next );
+	        } while ( (slot = set->next) );
 	    }
 	
 	    if (slot) {
@@ -354,12 +353,12 @@ namespace mongo {
 	    //  try again, this time with write lock
 	    SpinLatch::spinwritelock( latchmgr->table[hashidx].latch );
 	
-	    if (slot = latchmgr->table[hashidx].slot) {
+	    if ( (slot = latchmgr->table[hashidx].slot) ) {
 	        do {
 	            set = latchsets + slot;
 	            if (page_no == set->page_no) break;
 	            if (!set->pin && !avail) avail = slot;
-	        } while (slot = set->next);
+	        } while ( (slot = set->next) );
 	    }
 	
 	    //  found our entry, or take over an unpinned one
@@ -391,7 +390,7 @@ namespace mongo {
 	    // we don't use slot zero
 	    victim = __sync_fetch_and_add( &latchmgr->latchvictim, 1 );
 	
-	    if (victim %= latchmgr->latchtotal) {
+	    if ( (victim %= latchmgr->latchtotal) ) {
 	        set = latchsets + victim;
 	    }
 	    else {
@@ -452,7 +451,7 @@ namespace mongo {
 	//
 	PoolEntry* BufMgr::pinpool( uid page_no ) {
 	    uint slot, hashidx, idx, victim;
-	    PoolEntry *poolEntry, *node, *next;
+	    PoolEntry *poolEntry, *node;
 	
 	    // lock hash table chain
 	    hashidx = (uint)(page_no >> seg_bits) % hashsize;
@@ -538,22 +537,22 @@ namespace mongo {
 	//
 	// place write, read, or parent lock on requested page_no.
 	//
-	void BufMgr::lockpage( LockMode mode, LatchSet* set ) {
+	void BufMgr::lockpage( BLTLockMode mode, LatchSet* set ) {
 	    switch (mode) {
 	    case LockRead:
-	        RWLock::ReadLock( set->readwr );
+	        BLT_RWLock::ReadLock( set->readwr );
 	        break;
 	    case LockWrite:
-	        RWLock::WriteLock( set->readwr );
+	        BLT_RWLock::WriteLock( set->readwr );
 	        break;
 	    case LockAccess:
-	        RWLock::ReadLock( set->access );
+	        BLT_RWLock::ReadLock( set->access );
 	        break;
 	    case LockDelete:
-	        RWLock::WriteLock( set->access );
+	        BLT_RWLock::WriteLock( set->access );
 	        break;
 	    case LockParent:
-	        RWLock::WriteLock( set->parent );
+	        BLT_RWLock::WriteLock( set->parent );
 	        break;
 	    }
 	}
@@ -561,22 +560,22 @@ namespace mongo {
 	//
 	// remove write, read, or parent lock on requested page
 	//
-	void BufMgr::unlockpage( LockMode mode, LatchSet* set ) {
+	void BufMgr::unlockpage( BLTLockMode mode, LatchSet* set ) {
 	    switch (mode) {
 	    case LockRead:
-	        RWLock::ReadRelease( set->readwr );
+	        BLT_RWLock::ReadRelease( set->readwr );
 	        break;
 	    case LockWrite:
-	        RWLock::WriteRelease( set->readwr );
+	        BLT_RWLock::WriteRelease( set->readwr );
 	        break;
 	    case LockAccess:
-	        RWLock::ReadRelease( set->access );
+	        BLT_RWLock::ReadRelease( set->access );
 	        break;
 	    case LockDelete:
-	        RWLock::WriteRelease( set->access );
+	        BLT_RWLock::WriteRelease( set->access );
 	        break;
 	    case LockParent:
-	        RWLock::WriteRelease( set->parent );
+	        BLT_RWLock::WriteRelease( set->parent );
 	        break;
 	    }
 	}
@@ -588,14 +587,13 @@ namespace mongo {
 	    PageSet set[1];
 	    uid new_page;
 	    int reuse;
-	    int blk;
 	
 	    //    lock allocation page
 	    SpinLatch::spinwritelock( latchmgr->lock );
 	
 	    // use empty chain first else allocate empty page
 	    if ( (new_page = BLTVal::getid( latchmgr->chain )) ) {
-	        if (set->pool = pinpool( new_page )) {
+	        if ( (set->pool = pinpool( new_page )) ) {
 	            set->page = this->page( set->pool, new_page );
             }
 	        else {
@@ -621,7 +619,7 @@ namespace mongo {
 	
 	    //    bring new page into pool and copy page.
 	    //    this will extend the file into the new pages on WIN32.
-	    if (set->pool = pinpool( new_page )) {
+	    if ( (set->pool = pinpool( new_page )) ) {
 	        set->page = this->page( set->pool, new_page );
         }
 	    else {
@@ -671,11 +669,11 @@ namespace mongo {
 	//  find and load page at given level for given key
 	//    leave page rd or wr locked as requested
 	//
-	int BufMgr::loadpage( PageSet* set, uchar* key, uint len, uint lvl, LockMode lock ) {
+	int BufMgr::loadpage( PageSet* set, uchar* key, uint len, uint lvl, BLTLockMode lock ) {
 	    uid page_no = ROOT_page, prevpage = 0;
 	    uint drill = 0xff, slot;
 	    LatchSet* prevlatch;
-	    LockMode mode, prevmode;
+	    BLTLockMode mode, prevmode;
 	    PoolEntry* prevpool;
 	
 	    // start at root of btree and drill down
@@ -744,7 +742,7 @@ namespace mongo {
 	        //  find key on page at this level
 	        //  and descend to requested level
 	        if (!set->page->kill) {
-	            if (slot = findslot( set, key, len )) {
+	            if ( (slot = findslot( set, key, len )) ) {
 
 	                if (drill == lvl) return slot;
 	

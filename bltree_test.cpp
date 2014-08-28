@@ -101,15 +101,21 @@ namespace mongo {
 		//
 		static void* indexOp( void* arg ) {
 		    ThreadArg* args = (ThreadArg *)arg;
-		    int line = 0, found = 0, cnt = 0;
-		    uid next, page_no = LEAF_page;    // start on first page of leaves
+
+		    int line  = 0;
+            int found = 0;
+            int cnt   = 0;
+            int len   = 0;
+
+		    uid next;
+            uid page_no = LEAF_page;   // start on first page of leaves
 		    unsigned char key[256];
-		    int ch, len = 0, slot;
 		    PageSet set[1];
 		    BLTKey* ptr;
 		    BLTVal* val;
 		    BufMgr* mgr = args->mgr;
 		    FILE* in;
+		    int ch;
 		
 		    BLTree* bt = BLTree::create( mgr );
 		
@@ -233,7 +239,7 @@ namespace mongo {
 		            next = BLTVal::getid( set->page->right );
 		            cnt += set->page->act;
 		
-		            for (slot = 0; slot++ < set->page->cnt; ) {
+		            for (unsigned int slot = 0; slot++ < set->page->cnt; ) {
 		                if (next || slot < set->page->cnt) {
 		                    if (!slotptr(set->page, slot)->dead) {
 		                        ptr = keyptr(set->page, slot);
