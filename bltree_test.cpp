@@ -1,61 +1,22 @@
-//@file bltree_test.cpp
-/*
-*    Copyright (C) 2014 MongoDB Inc.
-*
-*    This program is free software: you can redistribute it and/or  modify
-*    it under the terms of the GNU Affero General Public License, version 3,
-*    as published by the Free Software Foundation.
-*
-*    This program is distributed in the hope that it will be useful,
-*    but WITHOUT ANY WARRANTY; without even the implied warranty of
-*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*    GNU Affero General Public License for more details.
-*
-*    You should have received a copy of the GNU Affero General Public License
-*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*    As a special exception, the copyright holders give permission to link the
-*    code of portions of this program with the OpenSSL library under certain
-*    conditions as described in each individual source file and distribute
-*    linked combinations including the program with the OpenSSL library. You
-*    must comply with the GNU Affero General Public License in all respects for
-*    all of the code used other than as permitted herein. If you modify file(s)
-*    with this exception, you may extend this exception to your version of the
-*    file(s), but you are not obligated to do so. If you do not wish to do so,
-*    delete this exception statement from your version. If you delete this
-*    exception statement from all source files in the program, then also delete
-*    it in the license file.
-*/
-
-/*
-*  This module contains derived code.   The original
-*  copyright notice is as follows:
-*
-*    This work, including the source code, documentation
-*    and related data, is placed into the public domain.
-*  
-*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
-*  
-*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
-*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
-*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
-*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
-*    RESULTING FROM THE USE, MODIFICATION, OR
-*    REDISTRIBUTION OF THIS SOFTWARE.
-*/
 
 #ifndef STANDALONE
 #include "mongo/base/status.h"
 #include "mongo/db/operation_context_noop.h"
-#include "mongo/db/storage/mmap_v1/bltree/bltree.h"
-#include "mongo/db/storage/mmap_v1/bltree/bufmgr.h"
 #include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltkey.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltree.h"
+#include "mongo/db/storage/mmap_v1/bltree/bltval.h"
+#include "mongo/db/storage/mmap_v1/bltree/bufmgr.h"
 #include "mongo/db/storage/mmap_v1/bltree/logger.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/unittest/unittest.h"
 #else
 #include "common.h"
+#include "blterr.h"
+#include "bltkey.h"
 #include "bltree.h"
+#include "bltval.h"
 #include "bufmgr.h"
 #include "logger.h"
 
@@ -64,6 +25,7 @@
 #endif
 
 #include <errno.h>
+#include <fstream>
 #include <iostream>
 #include <pthread.h>
 #include <sstream>
@@ -75,14 +37,13 @@
 #include <time.h>
 #include <unistd.h>
 #include <vector>
-    
+
 using namespace std;
 
 namespace mongo {
 
     class BLTreeTestDriver {
-	public:
-
+    public:
         double getCpuTime( int type ) {
             struct rusage used[1];
             struct timeval tv[1];
@@ -100,299 +61,262 @@ namespace mongo {
                 getrusage( RUSAGE_SELF, used );
                 return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
             } }
+        
             return 0;
         }
 
-		void printRUsage() {
-		    struct rusage used[1];
-		    getrusage( RUSAGE_SELF, used );
-		
-		    cout
-		        << "\nProcess resource usage:"
-		        << "\nmaximum resident set size = " << used->ru_maxrss 
-		        << "\nintegral shared memory size = " << used->ru_ixrss
-		        << "\nintegral unshared data size = " << used->ru_idrss
-		        << "\nintegral unshared stack size = " << used->ru_isrss
-		        << "\npage reclaims (soft page faults) = " << used->ru_minflt
-		        << "\npage faults (hard page faults) = " << used->ru_majflt
-		        << "\nswaps = " << used->ru_nswap
-		        << "\nblock input operations = " << used->ru_inblock
-		        << "\nblock output operations = " << used->ru_oublock
-		        << "\nIPC messages sent = " << used->ru_msgsnd
-		        << "\nIPC messages received = " << used->ru_msgrcv
-		        << "\nsignals received = " << used->ru_nsignals
-		        << "\nvoluntary context switches = " << used->ru_nvcsw
-		        << "\ninvoluntary context switches = " << used->ru_nivcsw << endl;
-		
-		}
+        void printRUsage() {
+            struct rusage used[1];
+            getrusage( RUSAGE_SELF, used );
+
+            cout
+                << "\nProcess resource usage:"
+                << "\nmaximum resident set size = " << used->ru_maxrss
+                << "\nintegral shared memory size = " << used->ru_ixrss
+                << "\nintegral unshared data size = " << used->ru_idrss
+                << "\nintegral unshared stack size = " << used->ru_isrss
+                << "\npage reclaims (soft page faults) = " << used->ru_minflt
+                << "\npage faults (hard page faults) = " << used->ru_majflt
+                << "\nswaps = " << used->ru_nswap
+                << "\nblock input operations = " << used->ru_inblock
+                << "\nblock output operations = " << used->ru_oublock
+                << "\nIPC messages sent = " << used->ru_msgsnd
+                << "\nIPC messages received = " << used->ru_msgrcv
+                << "\nsignals received = " << used->ru_nsignals
+                << "\nvoluntary context switches = " << used->ru_nvcsw
+                << "\ninvoluntary context switches = " << used->ru_nivcsw << endl;
+
+        }
 
 		typedef struct {
-		    char _type;
-		    char _idx;
-		    const char* _infile;
-		    BufferMgr* _mgr;
-		    const char* _thread;
+		    char type;
+		    char idx;
+		    char *infile;
+		    BufMgr* mgr;
+            const char* thread;
 		} ThreadArg;
-		
+
 		//
 		// thread callback
 		//
-		static void* indexOp( void* rawArg ) {
-		    uchar key[256];
-		    PageSet set[1]; // set -> stack alloc
+		static void* indexOp( void* arg ) {
+		    ThreadArg* args = (ThreadArg *)arg;
+		    int line = 0, found = 0, cnt = 0;
+		    uid next, page_no = LEAF_page;    // start on first page of leaves
+		    unsigned char key[256];
+		    int ch, len = 0, slot;
+		    PageSet set[1];
+		    BLTKey* ptr;
+		    BLTVal* val;
+		    BufMgr* mgr = args->mgr;
+		    FILE* in;
 		
-		    ThreadArg* args = (ThreadArg *)rawArg;
-		    BufferMgr* mgr = args->_mgr;
-		    const char* thread = args->_thread;
+		    BLTree* bt = BLTree::create( mgr );
 		
-		    // per thread index accessor
-		    BLTree* blt = BLTree::create( mgr, thread );
-		
-		    __OSS__( "args->_type = " << args->_type );
-		    Logger::logDebug( thread, __ss__, __LOC__ );
-		
-		    switch (args->_type | 0x20) {
+		    switch(args->type | 0x20) {
 		    case 'a': {
-		        Logger::logInfo( thread, "\n[[ latch mgr audit ]]", __LOC__ );
-		        blt->latchAudit();
+		        fprintf( stderr, "started latch mgr audit\n" );
+		        cnt = bt->latchaudit();
+		        fprintf( stderr, "finished latch mgr audit, found %d keys\n", cnt );
 		        break;
 		    }
-		    case 'w': {
-		        {
-		            __OSS__( "\nINDEXING: " << args->_infile );
-		            Logger::logInfo( thread, __ss__, __LOC__ );
-		        }
-
-                char val[256];
-                for (uint i=0; i<256; ++i) {
-                    val[i] = 32 + random()%95;  //32 .. 126
-                }
-		
-		        FILE* in = fopen( args->_infile, "rb" );
-		        if (in) {
-		            int len = 0;
-		            int docid = 0;
-		            int ch;
-		
-		            while (ch = getc(in), ch != EOF) {
-		                if (ch == '\n') {
-		                    docid++;
-		
-		                    if (blt->insertKeyVal( key, len, (uchar *)val, 256, 0 )) {
-		                        __OSS__( "Error " << blt->getLastError() << ", docid " << docid );
-		                        Logger::logError( thread, __ss__, __LOC__ );
-		                        exit(0);
-		                    }
-		                    len = 0;
-		
-		                    if (0 == docid % 250000) {
-		                        __OSS__( "thread " << thread << " inserted " << docid << " keys" );
-		                        Logger::logInfo( "main", __ss__, __LOC__ );
-		                    }
-		                 }
-		                 else if (len < 255) {
-		                    key[len++] = ch;
-		                }
-		            }
-		            {
-		                __OSS__( "finished " << args->_infile << " for " << docid << " keys" );
-		                Logger::logInfo( thread, __ss__, __LOC__ );
-		            }
-		        }
-		        break;
-		    }
-		    case 'd': {
-		        {
-		            __OSS__( "\nDELETING KEYS: " << args->_infile );
-		            Logger::logInfo( thread, __ss__, __LOC__ );
-		        }
-		
-		        FILE* in = fopen( args->_infile, "rb" );
-		        if (in) {
-		            int len = 0;
-		            int line = 0;
-		            int ch;
-		
+		    case 'p': {
+		        fprintf( stderr, "started pennysort for %s\n", args->infile );
+		        if ( (in = fopen( args->infile, "rb" )) ) {
 		            while (ch = getc(in), ch != EOF) {
 		                if (ch == '\n') {
 		                    line++;
-		                    if (blt->deleteKey( key, len, 0)) {
-		                        __OSS__( "Error " << blt->getLastError() << ", Line " << line );
-		                        Logger::logError( thread, __ss__, __LOC__ );
-		                        exit(0);
+		                    if (bt->insertkey( key, 10, 0, key + 10, len - 10) ) {
+		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+		                        exit( -1 );
 		                    }
-		                    //(cout << "deleted '").write( (const char*)key, len ) << '\'' << endl;
 		                    len = 0;
 		                }
 		                else if (len < 255) {
 		                    key[len++] = ch;
 		                }
 		            }
-		            {
-		                __OSS__( "finished " << args->_infile << " for " << line << " keys" );
-		                Logger::logInfo( thread, __ss__, __LOC__ );
+		        }
+		        else {
+		            fprintf( stderr, "error opening %s\n", args->infile );
+		        }
+		
+		        fprintf( stderr, "finished %s for %d keys\n", args->infile, line );
+		        break;
+		    }
+		    case 'w': {
+		        fprintf( stderr, "started indexing for %s\n", args->infile );
+		        if ( (in = fopen( args->infile, "rb" )) ) {
+		            while (ch = getc(in), ch != EOF) {
+		                if (ch == '\n') {
+		                    line++;
+
+		                    if (bt->insertkey( key, len, 0, key, len) ) {
+		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line);
+		                        exit( -1 );
+		                    }
+		                    len = 0;
+		                }
+		                else if (len < 255) {
+		                    key[len++] = ch;
+		                }
 		            }
 		        }
+		        else {
+		            fprintf( stderr, "error opening %s\n", args->infile );
+		        }
+		
+		        fprintf(stderr, "finished %s for %d keys\n", args->infile, line);
+		        break;
+		    }
+		    case 'd': {
+		        fprintf( stderr, "started deleting keys for %s\n", args->infile );
+		        if ( (in = fopen( args->infile, "rb" )) ) {
+		            while (ch = getc(in), ch != EOF) {
+		                if( ch == '\n' ) {
+		                    line++;
+		
+		                    if (bt->deletekey( key, len, 0 )) {
+		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+		                        exit( -1 );
+		                    }
+		                    len = 0;
+		                }
+		                else if (len < 255) {
+		                    key[len++] = ch;
+		                }
+		            }
+		        }
+		        else {
+		            fprintf( stderr, "error opening %s\n", args->infile );
+		        }
+		
+		        fprintf(stderr, "finished %s for keys, %d \n", args->infile, line);
 		        break;
 		    }
 		    case 'f': {
-		        {
-		            __OSS__( "\nFINDING: " << args->_infile );
-		            Logger::logInfo( thread, __ss__, __LOC__ );
-		        }
-		
-		        FILE* in = fopen( args->_infile, "rb" );
-		        if (in) {
-		            BLTERR err;
-                    char val[256];
-		            uint found = 0;
-		            int line = 0;
-		            int len = 0;
-		            int ch;
-		
-		            while (ch = getc(in), ch != EOF) {
+		        fprintf( stderr, "started finding keys for %s\n", args->infile );
+		        if ( (in = fopen( args->infile, "rb" )) ) {
+		            while( ch = getc(in), ch != EOF ) {
 		                if (ch == '\n') {
-		                    ++line;
-		                    int valLen = blt->findKey( key, len, (uchar *)val, 256 );
-		                    if (-1 != valLen) {
-		                        ++found;
+		                    line++;
+		    
+		                    if (bt->findkey( key, len, NULL, 0 ) == 0) {
+		                        found++;
 		                    }
-		                    else if ( (err = blt->getLastError()) ) {
-		                        __OSS__( "Error " << err << " Syserr " << strerror(errno) << " Line " << line );
-		                        Logger::logError( thread, __ss__, __LOC__ );
-		                        exit(-1);
+		                    else if (bt->err) {
+		                        fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line);
+		                         exit(0);
 		                    }
 		                    len = 0;
-		
-		                    if (0 == line % 250000) {
-		                        __OSS__( "thread " << thread << " found " << found << " of " << line << " keys" );
-		                        Logger::logInfo( "main", __ss__, __LOC__ );
-		                    }
 		                }
 		                else if (len < 255) {
 		                    key[len++] = ch;
 		                }
-		            }
-		            {
-		                __OSS__( "finished " << args->_infile << " for " << line << " keys, found " << found );
-		                Logger::logInfo( thread, __ss__, __LOC__ );
-		            }
+		            }   // end while
 		        }
+		
+		        fprintf( stderr, "finished %s for %d keys, found %d\n", args->infile, line, found );
 		        break;
 		    }
 		    case 's': {
-		        Logger::logInfo( thread, "\nSCANNING", __LOC__ );
-		
-		        uint cnt = 0;
-		        PageNo pageNo = LEAF_page;
-		        PageNo next;
-		        char buf[256];
-		
+		        fprintf( stderr, "started scanning\n" );
 		        do {
-		            if ((set->_pool = mgr->pinPoolEntry( pageNo, thread ))) {
-		                set->_page = mgr->page( set->_pool, pageNo, thread );
+		            if ( (set->pool = bt->mgr->pinpool( page_no )) ) {
+		                set->page = bt->mgr->page( set->pool, page_no );
 		            }
 		            else {
 		                break;
 		            }
+		            set->latch = bt->mgr->pinlatch( page_no );
+		            bt->mgr->lockpage( LockRead, set->latch );
+		            next = BLTVal::getid( set->page->right );
+		            cnt += set->page->act;
 		
-		            Page* page = set->_page;
-		
-		            set->_latch = mgr->getLatchMgr()->pinLatch( pageNo, thread );
-		            mgr->lockPage( LockRead, set->_latch, thread );
-		            next = page->_right;
-		            cnt += page->_act;
-		
-		            //cout << "\npage id : " << pageNo << " -> " << next << '\n' << *(page) << endl;
-		
-		            for (uint slot = 0; slot++ < page->_cnt;) {
-		                if (next || slot < page->_cnt) {
-		                    if (!Page::slotptr(page, slot)->_dead) {
-		                        BLTKey* key = Page::keyptr(page, slot);
-		                        strncpy( buf, (const char*)key->_key, key->_len );
-		                        buf[ key->_len ] = 0;
-		                        //Logger::logInfo( thread, buf, __LOC__ );
+		            for (slot = 0; slot++ < set->page->cnt; ) {
+		                if (next || slot < set->page->cnt) {
+		                    if (!slotptr(set->page, slot)->dead) {
+		                        ptr = keyptr(set->page, slot);
+		                        fwrite( ptr->key, ptr->len, 1, stdout );
+		                        fputc( ' ', stdout );
+		                        fputc( '-', stdout );
+		                        fputc( '>', stdout );
+		                        fputc( ' ', stdout );
+		                        val = valptr( set->page, slot );
+		                        fwrite( val->value, val->len, 1, stdout );
+		                        fputc( '\n', stdout );
 		                    }
 		                }
 		            }
+		            bt->mgr->unlockpage( LockRead, set->latch );
+		            bt->mgr->unpinlatch( set->latch );
+		            bt->mgr->unpinpool( set->pool );
+		        } while ( (page_no = next) );
 		
-		            mgr->unlockPage( LockRead, set->_latch, thread );
-		            mgr->getLatchMgr()->unpinLatch( set->_latch, thread );
-		            mgr->unpinPoolEntry( set->_pool, thread );
-		        } while ((pageNo = next));
-		
-		        --cnt;    // don't count stop/sentinel key
-		
-		        {
-		            __OSS__( " Total keys read " << cnt );
-		            Logger::logInfo( thread, __ss__, __LOC__ );
-		        }
-		
+		        cnt--;    // remove stopper key
+		        fprintf(stderr, " Total keys read %d\n", cnt);
 		        break;
 		    }
-		    case 'c': {
-		        Logger::logInfo( thread, "\nCOUNTING", __LOC__ );
-		        uint cnt = 0;
-		        PageNo pageNo = LEAF_page;
-		        PageNo next = mgr->getLatchMgr()->_nlatchPage + LATCH_page;
+		    case 'c':
+		        //posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
 		
-		        while (pageNo < mgr->getLatchMgr()->_alloc->_right) {
-		            PageNo off = pageNo << mgr->getPageBits();
-		            pread( mgr->getFD(), blt->getFrame(), mgr->getPageSize(), off );
-		            if (!blt->getFrame()->_free && !blt->getFrame()->_level) cnt += blt->getFrame()->_act;
-		            if (pageNo > LEAF_page) next = pageNo + 1;
-		            pageNo = next;
+		        fprintf(stderr, "started counting\n");
+		        next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
+		        page_no = LEAF_page;
+		
+		        while (page_no < BLTVal::getid( bt->mgr->latchmgr->alloc->right )) {
+		            uid off = page_no << bt->mgr->page_bits;
+		            pread( bt->mgr->idx, bt->frame, bt->mgr->page_size, off );
+		            if (!bt->frame->free && !bt->frame->lvl) {
+		                cnt += bt->frame->act;
+		            }
+		            if (page_no > LEAF_page) {
+		                next = page_no + 1;
+		            }
+		            page_no = next;
 		        }
 		        
 		        cnt--;    // remove stopper key
-		        {
-		            __OSS__( "Total keys read " << cnt );
-		            Logger::logInfo( thread, __ss__, __LOC__ );
-		        }
+		        fprintf( stderr, " Total keys read %d\n", cnt );
 		        break;
 		    }
-		    default: {
-		        __OSS__( "Unrecognized command type: " << args->_type );
-		        Logger::logError( thread, __ss__, __LOC__ );
-		    }
-		    }
 		
-		    blt->close();
+		    bt->close();
 		    return NULL;
 		}
 
         typedef struct timeval timer;
 
-		Status drive( const std::string& dbname,  // index file name
-		    		  const std::vector<std::string>& cmdv,  // cmd list 
-		    		  const std::vector<std::string>& srcv,  // source key file list
-		              uint pageBits,     // (i.e.) 32KB per page
-		              uint poolSize,     // (i.e.) 4096 segments -> 4GB
-		              uint segBits )     // (i.e.) 32 pages per segment -> 1MB 
-		{
-		    if (poolSize > 65536) {
-		        std::cout << "poolSize too large, defaulting to 65536" << std::endl;
-		        poolSize = 65536;
-		    }
-		    
-		    std::cout <<
-		        " dbname = " << dbname <<
-		        "\n pageBits = " << pageBits <<
-		        "\n poolSize = " << poolSize <<
-		        "\n segBits = "  << segBits << std::endl;
-		
-		    if (cmdv.size() != srcv.size()) {
+        Status drive( const std::string& dbname,  // index file name
+                      const std::vector<std::string>& cmdv,  // cmd list 
+                      const std::vector<std::string>& srcv,  // source key file list
+                      uint pageBits,     // (i.e.) 32KB per page
+                      uint poolSize,     // (i.e.) 4096 segments -> 4GB
+                      uint segBits )     // (i.e.) 32 pages per segment -> 1MB 
+        {
+            if (poolSize > 65536) {
+                std::cout << "poolSize too large, defaulting to 65536" << std::endl;
+                poolSize = 65536;
+            }
+            
+            std::cout <<
+                " dbname = " << dbname <<
+                "\n pageBits = " << pageBits <<
+                "\n poolSize = " << poolSize <<
+                "\n segBits = "  << segBits << std::endl;
+        
+            if (cmdv.size() != srcv.size()) {
 #ifndef STANDALONE
-		        return Status( ErrorCodes::InternalError,
+                return Status( ErrorCodes::InternalError,
                                 "Need one command per source key file (per thread)." );
 #else
                 return -1;
 #endif
-		    }
-		
-		    for (uint i=0; i<srcv.size(); ++i) {
-		        std::cout << " : " << cmdv[i] << " -> " << srcv[i] << std::endl;
-		    } 
+            }
+        
+            for (uint i=0; i<srcv.size(); ++i) {
+                std::cout << " : " << cmdv[i] << " -> " << srcv[i] << std::endl;
+            } 
 
             if (cmdv.size() == 1 && cmdv[0]=="Clear") {
                 if (dbname.size()) {
@@ -404,119 +328,118 @@ namespace mongo {
                 return 0;
 #endif
             }
-		
-		    double start = getCpuTime(0);
-		    uint cnt = srcv.size();
-		
-		    if (cnt > 100) {
+        
+            double start = getCpuTime(0);
+            uint cnt = srcv.size();
+        
+            if (cnt > 100) {
 #ifndef STANDALONE
                 return Status( ErrorCodes::InternalError, "Cmd count exceeds 100." );
 #else
                 return -1;
 #endif
-		    }
-		
-		    pthread_t threads[ cnt ];
-		    ThreadArg args[ cnt ];
-		    const char* threadNames[ 100 ] = {
-		      "main", "01", "02", "03", "04", "05", "06", "07", "08", "09",
-		        "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
-		        "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-		        "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
-		        "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
-		        "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
-		        "60", "61", "62", "63", "64", "65", "66", "67", "68", "69",
-		        "70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
-		        "80", "81", "82", "83", "84", "85", "86", "87", "88", "89",
-		        "90", "91", "92", "93", "94", "95", "96", "97", "98", "99" };
-		
-		    // initialize logger
-		    vector< pair< string, ostream* > > v;
-		    v.push_back( pair< string, ostream* >( threadNames[ 0 ], &std::cout ) );
-		    for (uint i=1; i<=cnt; ++i) {
-		        v.push_back( pair< string, ostream* >( threadNames[ i ], new ostringstream() ) );
-		    }
-		    Logger::init( v );
+            }
+        
+            pthread_t threads[ cnt ];
+            ThreadArg args[ cnt ];
+            const char* threadNames[ 100 ] = {
+              "main", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+                "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+                "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+                "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+                "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+                "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+                "60", "61", "62", "63", "64", "65", "66", "67", "68", "69",
+                "70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
+                "80", "81", "82", "83", "84", "85", "86", "87", "88", "89",
+                "90", "91", "92", "93", "94", "95", "96", "97", "98", "99" };
+        
+            // initialize logger
+            vector< pair< string, ostream* > > v;
+            v.push_back( pair< string, ostream* >( threadNames[ 0 ], &std::cout ) );
+            for (uint i=1; i<=cnt; ++i) {
+                v.push_back( pair< string, ostream* >( threadNames[ i ], new ostringstream() ) );
+            }
+            Logger::init( v );
 
-			// Record store
-			
-		
-		    // allocate buffer pool manager
-		    BufferMgr* mgr = BufferMgr::create( dbname.c_str(), // index file name
-		                                        pageBits,       // page size in bits
-		                                        poolSize,       // number of segments
-		                                        segBits,        // segment size in pages in bits
-		                                        poolSize );     // hashSize
-		
-		    if (!mgr) {
+            // allocate buffer pool manager
+            char* name = (char *)dbname.c_str();
+            BufMgr* mgr = BufMgr::create( name,         // index file name
+                                          BT_rw,        // file open mode
+                                          pageBits,     // page size in bits
+                                          poolSize,     // number of segments
+                                          segBits,      // segment size in pages in bits
+                                          poolSize );   // hashSize
+        
+            if (!mgr) {
 #ifndef STANDALONE
                 return Status( ErrorCodes::InternalError, "Buffer pool create failed." );
 #else
                 return -1;
 #endif
-		    }
+            }
 
-		    // start threads
-		    std::cout << " Starting:" << std::endl;
-		    for (uint i = 0; i < cnt; ++i) {
-		        std::cout << "  thread " << i << std::endl;
-		        args[i]._infile = srcv[i].c_str();
-		        args[i]._type = cmdv[i][0];   // (i.e.) A/W/D/F/S/C
-		        args[i]._mgr = mgr;
-		        args[i]._idx = i;
-		        args[i]._thread = threadNames[ i+1 ];
-		        int err = pthread_create( &threads[i], NULL, BLTreeTestDriver::indexOp, &args[i] );
-		        if (err) {
+            // start threads
+            std::cout << " Starting:" << std::endl;
+            for (uint i = 0; i < cnt; ++i) {
+                std::cout << "  thread " << i << std::endl;
+                args[i].infile = (char *)srcv[i].c_str();
+                args[i].type = cmdv[i][0];   // (i.e.) A/W/D/F/S/C
+                args[i].mgr = mgr;
+                args[i].idx = i;
+                args[i].thread = threadNames[ i+1 ];
+                int err = pthread_create( &threads[i], NULL, BLTreeTestDriver::indexOp, &args[i] );
+                if (err) {
 #ifndef STANDALONE
                     return Status( ErrorCodes::InternalError, "Error creating thread" );
 #else
-					return -1;
+                    return -1;
 #endif
                 }
-		    }
-		
-		    // wait for termination
-		    std::cout << " Waiting for thread terminations." << std::endl;
-		    for (uint idx = 0; idx < cnt; ++idx) {
-		        pthread_join( threads[idx], NULL );
-		    }
-		
-		    for (uint idx = 0; idx < cnt; ++idx) {
-		        const char* thread = args[ idx ]._thread;
-		        std::cout << "\n*** Thread '" << thread << "' log ***" << std::endl;
-		        ostream* os = Logger::getStream( thread );
-				if (NULL!=os) {
-		        	ostringstream* oss = dynamic_cast<ostringstream*>( os );
-					if (NULL!=oss) {
-		        		std::cout << oss->str() << std::endl;
-					}
-				}
-		    }
-		
-		    float elapsed0 = getCpuTime(0) - start;
-		    float elapsed1 = getCpuTime(1);
-		    float elapsed2 = getCpuTime(2);
+            }
+        
+            // wait for termination
+            std::cout << " Waiting for thread terminations." << std::endl;
+            for (uint idx = 0; idx < cnt; ++idx) {
+                pthread_join( threads[idx], NULL );
+            }
+        
+            for (uint idx = 0; idx < cnt; ++idx) {
+                const char* thread = args[ idx ].thread;
+                std::cout << "\n*** Thread '" << thread << "' log ***" << std::endl;
+                ostream* os = Logger::getStream( thread );
+                if (NULL!=os) {
+                    ostringstream* oss = dynamic_cast<ostringstream*>( os );
+                    if (NULL!=oss) {
+                        std::cout << oss->str() << std::endl;
+                    }
+                }
+            }
+        
+            float elapsed0 = getCpuTime(0) - start;
+            float elapsed1 = getCpuTime(1);
+            float elapsed2 = getCpuTime(2);
 
-		    std::cout <<
+            std::cout <<
                   " real "  << (int)(elapsed0/60) << "m " <<
                     elapsed0 - (int)(elapsed0/60)*60 << 's' <<
-		        "\n user "  << (int)(elapsed1/60) << "m " <<
-	                elapsed1 - (int)(elapsed1/60)*60 << 's' <<
-		        "\n sys  "  << (int)(elapsed2/60) << "m " <<
-	                elapsed2 - (int)(elapsed2/60)*60 << 's' << std::endl;
-		
-		    printRUsage();
+                "\n user "  << (int)(elapsed1/60) << "m " <<
+                    elapsed1 - (int)(elapsed1/60)*60 << 's' <<
+                "\n sys  "  << (int)(elapsed2/60) << "m " <<
+                    elapsed2 - (int)(elapsed2/60)*60 << 's' << std::endl;
+        
+            printRUsage();
 
-		    mgr->close( "main" );
+            BufMgr::destroy( mgr );
 
 #ifndef STANDALONE
-			return Status::OK();
+            return Status::OK();
 #else
             return 0;
 #endif
 
-		}
-	};
+        }
+    };
 
 #ifndef STANDALONE
 
@@ -526,31 +449,31 @@ namespace mongo {
 
     TEST( BLTree, BasicWriteTest ) {
 
-		BLTreeTestDriver driver;
+        BLTreeTestDriver driver;
         std::vector<std::string> cmdv;
         std::vector<std::string> srcv;
 
-		/*
-		// clear db
+        /*
+        // clear db
         cmdv.push_back( "Clear" );
         srcv.push_back( "" );
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
 
-		// one insert thread
+        // one insert thread
         cmdv.clear();
         cmdv.push_back( "Write" );
         srcv.clear();
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
 
-		// clear db
+        // clear db
         cmdv.clear();
         srcv.clear();
         cmdv.push_back( "Clear" );
         srcv.push_back( "" );
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
 
-		// three insert threads
+        // three insert threads
         cmdv.clear();
         cmdv.push_back( "Write" );
         cmdv.push_back( "Write" );
@@ -560,17 +483,17 @@ namespace mongo {
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.2" );
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
-		*/
+        */
 
-		// five insert threads
+        // five insert threads
         cmdv.clear();
         srcv.clear();
 
-        cmdv.push_back( "Write" );	//[0]
-        cmdv.push_back( "Write" );	//[1]
-        cmdv.push_back( "Write" );	//[2]
-        cmdv.push_back( "Write" );	//[3]
-        cmdv.push_back( "Write" );	//[4]
+        cmdv.push_back( "Write" );    //[0]
+        cmdv.push_back( "Write" );    //[1]
+        cmdv.push_back( "Write" );    //[2]
+        cmdv.push_back( "Write" );    //[3]
+        cmdv.push_back( "Write" );    //[4]
 
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
@@ -580,18 +503,18 @@ namespace mongo {
 
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 32768, 2 ) );
 
-		// five find threads, two insert threads
-		/*
+        // five find threads, two insert threads
+        /*
         cmdv.clear();
         srcv.clear();
 
-        cmdv.push_back( "Find" );	//[0]
-        cmdv.push_back( "Find" );	//[1]
-        cmdv.push_back( "Find" );	//[2]
-        cmdv.push_back( "Find" );	//[3]
-        cmdv.push_back( "Find" );	//[4]
-        //cmdv.push_back( "Write" );	//[5]
-        //cmdv.push_back( "Write" );	//[6]
+        cmdv.push_back( "Find" );    //[0]
+        cmdv.push_back( "Find" );    //[1]
+        cmdv.push_back( "Find" );    //[2]
+        cmdv.push_back( "Find" );    //[3]
+        cmdv.push_back( "Find" );    //[4]
+        //cmdv.push_back( "Write" );    //[5]
+        //cmdv.push_back( "Write" );    //[6]
 
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
@@ -602,12 +525,12 @@ namespace mongo {
         //srcv.push_back( "/home/paulpedersen/dev/bltree/keys.6" );
 
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 32768, 1 ) );
-		*/
+        */
 
-	}
+    }
 
 #endif
-	
+    
 }   // namespace mongo
 
 
@@ -629,7 +552,7 @@ int main(int argc, char* argv[] ) {
     string cmd;             // command = { Audit|Write|Delete|Find|Scan|Count }
     uint pageBits = 16;     // (i.e.) 32KB per page
     uint poolSize = 8192;   // (i.e.) 8192 segments
-    uint segBits = 5;       // (i.e.) 32 pages per segment
+    uint segBits  = 5;      // (i.e.) 32 pages per segment
 
     mongo::BLTreeTestDriver driver;
     vector<string> srcv;    // source files containing keys
@@ -684,9 +607,99 @@ int main(int argc, char* argv[] ) {
         }
     }
 
-    if (driver.drive( "testdb", cmdv, srcv, 15, 32768, 2 )) {
+    if (driver.drive( "testdb", cmdv, srcv, pageBits, poolSize, segBits )) {
         cout << "driver returned error" << endl;
     }
 
 }
 #endif
+
+/*
+int main( int argc, char* argv[] ) {
+
+    int idx, cnt, len, slot, err;
+    int segsize, bits = 16;
+    double start, stop;
+    unsigned int poolsize = 0;
+    float elapsed;
+    char key[1];
+
+    pthread_t* threads;
+    ThreadArg* args;
+    mongo::BufMgr* mgr;
+    mongo::BLTKey* ptr;
+    mongo::BLTree*  bt;
+
+    if (argc < 3) {
+        fprintf( stderr, "Usage: %s idx_file Read/Write/Scan/Delete/Find [page_bits mapped_segments seg_bits line_numbers src_file1 src_file2 ... ]\n", argv[0] );
+        fprintf( stderr, "  where page_bits is the page size in bits\n" );
+        fprintf( stderr, "  mapped_segments is the number of mmap segments in buffer pool\n" );
+        fprintf( stderr, "  seg_bits is the size of individual segments in buffer pool in pages in bits\n" );
+        fprintf( stderr, "  src_file1 thru src_filen are files of keys separated by newline\n" );
+        exit(0);
+    }
+
+    start = getCpuTime(0);
+
+    if (argc > 3) {
+        bits = atoi(argv[3]);
+    }
+    if (argc > 4) {
+        poolsize = atoi(argv[4]);
+    }
+    if (!poolsize) {
+        fprintf( stderr, "Warning: no mapped_pool\n" );
+    }
+    if (poolsize > 65535) {
+        fprintf( stderr, "Warning: mapped_pool > 65535 segments\n" );
+    }
+    if (argc > 5) {
+        segsize = atoi(argv[5]);
+    }
+    else {
+        segsize = 4;     // 16 pages per mmap segment
+    }
+
+    printf( "allocate threads\n" );
+    cnt = argc - 7;
+    threads = (pthread_t *)malloc( cnt * sizeof(pthread_t) );
+    args = (ThreadArg *)malloc( cnt * sizeof(ThreadArg) );
+
+    printf( "create bufmgr\n" );
+    mgr = mongo::BufMgr::create( (argv[1]), BT_rw, bits, poolsize, segsize, poolsize / 8 );
+
+    if (!mgr) {
+        fprintf(stderr, "Index Open Error %s\n", argv[1]);
+        exit(-1);
+    }
+
+    // fire off threads
+    printf( "fire off threads\n" );
+    for (idx = 0; idx < cnt; idx++) {
+        args[idx].infile = argv[idx + 7];
+        args[idx].type = argv[2][0];
+        args[idx].mgr = mgr;
+        args[idx].idx = idx;
+        if ( (err = pthread_create( threads + idx, NULL, index_file, args + idx)) ) {
+            fprintf( stderr, "Error creating thread %d\n", err );
+        }
+    }
+
+    // wait for termination
+    printf( "wait for thread termination\n" );
+    for (idx = 0; idx < cnt; idx++ ) {
+        pthread_join( threads[idx], NULL );
+    }
+
+    printf( "print stats\n" );
+    elapsed = getCpuTime(0) - start;
+    fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+    elapsed = getCpuTime(1);
+    fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+    elapsed = getCpuTime(2);
+    fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+
+    mongo::BufMgr::destroy( mgr );
+    
+}
+*/
