@@ -14,8 +14,8 @@ namespace mongo {
         static void putid( uchar* dest, uid id );
         static uid getid( uchar* src );
         
-	    uchar len;
-	    uchar value[1];
+        uchar len;
+        uchar value[1];
     };
 
 }   // namespace mongo

@@ -21,7 +21,7 @@ namespace mongo {
     class BLTree {
     public:
         // factory
-	    static BLTree* create( BufMgr* mgr );
+        static BLTree* create( BufMgr* mgr );
         void close();
 
     public:

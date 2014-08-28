@@ -88,208 +88,208 @@ namespace mongo {
 
         }
 
-		typedef struct {
-		    char type;
-		    char idx;
-		    char *infile;
-		    BufMgr* mgr;
+        typedef struct {
+            char type;
+            char idx;
+            char *infile;
+            BufMgr* mgr;
             const char* thread;
-		} ThreadArg;
+        } ThreadArg;
 
-		//
-		// thread callback
-		//
-		static void* indexOp( void* arg ) {
-		    ThreadArg* args = (ThreadArg *)arg;
+        //
+        // thread callback
+        //
+        static void* indexOp( void* arg ) {
+            ThreadArg* args = (ThreadArg *)arg;
 
-		    int line  = 0;
+            int line  = 0;
             int found = 0;
             int cnt   = 0;
             int len   = 0;
 
-		    uid next;
+            uid next;
             uid page_no = LEAF_page;   // start on first page of leaves
-		    unsigned char key[256];
-		    PageSet set[1];
-		    BLTKey* ptr;
-		    BLTVal* val;
-		    BufMgr* mgr = args->mgr;
-		    FILE* in;
-		    int ch;
-		
-		    BLTree* bt = BLTree::create( mgr );
-		
-		    switch(args->type | 0x20) {
-		    case 'a': {
-		        fprintf( stderr, "started latch mgr audit\n" );
-		        cnt = bt->latchaudit();
-		        fprintf( stderr, "finished latch mgr audit, found %d keys\n", cnt );
-		        break;
-		    }
-		    case 'p': {
-		        fprintf( stderr, "started pennysort for %s\n", args->infile );
-		        if ( (in = fopen( args->infile, "rb" )) ) {
-		            while (ch = getc(in), ch != EOF) {
-		                if (ch == '\n') {
-		                    line++;
-		                    if (bt->insertkey( key, 10, 0, key + 10, len - 10) ) {
-		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
-		                        exit( -1 );
-		                    }
-		                    len = 0;
-		                }
-		                else if (len < 255) {
-		                    key[len++] = ch;
-		                }
-		            }
-		        }
-		        else {
-		            fprintf( stderr, "error opening %s\n", args->infile );
-		        }
-		
-		        fprintf( stderr, "finished %s for %d keys\n", args->infile, line );
-		        break;
-		    }
-		    case 'w': {
-		        fprintf( stderr, "started indexing for %s\n", args->infile );
-		        if ( (in = fopen( args->infile, "rb" )) ) {
-		            while (ch = getc(in), ch != EOF) {
-		                if (ch == '\n') {
-		                    line++;
+            unsigned char key[256];
+            PageSet set[1];
+            BLTKey* ptr;
+            BLTVal* val;
+            BufMgr* mgr = args->mgr;
+            FILE* in;
+            int ch;
+        
+            BLTree* bt = BLTree::create( mgr );
+        
+            switch(args->type | 0x20) {
+            case 'a': {
+                fprintf( stderr, "started latch mgr audit\n" );
+                cnt = bt->latchaudit();
+                fprintf( stderr, "finished latch mgr audit, found %d keys\n", cnt );
+                break;
+            }
+            case 'p': {
+                fprintf( stderr, "started pennysort for %s\n", args->infile );
+                if ( (in = fopen( args->infile, "rb" )) ) {
+                    while (ch = getc(in), ch != EOF) {
+                        if (ch == '\n') {
+                            line++;
+                            if (bt->insertkey( key, 10, 0, key + 10, len - 10) ) {
+                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+                                exit( -1 );
+                            }
+                            len = 0;
+                        }
+                        else if (len < 255) {
+                            key[len++] = ch;
+                        }
+                    }
+                }
+                else {
+                    fprintf( stderr, "error opening %s\n", args->infile );
+                }
+        
+                fprintf( stderr, "finished %s for %d keys\n", args->infile, line );
+                break;
+            }
+            case 'w': {
+                fprintf( stderr, "started indexing for %s\n", args->infile );
+                if ( (in = fopen( args->infile, "rb" )) ) {
+                    while (ch = getc(in), ch != EOF) {
+                        if (ch == '\n') {
+                            line++;
 
-		                    if (bt->insertkey( key, len, 0, key, len) ) {
-		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line);
-		                        exit( -1 );
-		                    }
-		                    len = 0;
-		                }
-		                else if (len < 255) {
-		                    key[len++] = ch;
-		                }
-		            }
-		        }
-		        else {
-		            fprintf( stderr, "error opening %s\n", args->infile );
-		        }
-		
-		        fprintf(stderr, "finished %s for %d keys\n", args->infile, line);
-		        break;
-		    }
-		    case 'd': {
-		        fprintf( stderr, "started deleting keys for %s\n", args->infile );
-		        if ( (in = fopen( args->infile, "rb" )) ) {
-		            while (ch = getc(in), ch != EOF) {
-		                if( ch == '\n' ) {
-		                    line++;
-		
-		                    if (bt->deletekey( key, len, 0 )) {
-		                        fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
-		                        exit( -1 );
-		                    }
-		                    len = 0;
-		                }
-		                else if (len < 255) {
-		                    key[len++] = ch;
-		                }
-		            }
-		        }
-		        else {
-		            fprintf( stderr, "error opening %s\n", args->infile );
-		        }
-		
-		        fprintf(stderr, "finished %s for keys, %d \n", args->infile, line);
-		        break;
-		    }
-		    case 'f': {
-		        fprintf( stderr, "started finding keys for %s\n", args->infile );
-		        if ( (in = fopen( args->infile, "rb" )) ) {
-		            while( ch = getc(in), ch != EOF ) {
-		                if (ch == '\n') {
-		                    line++;
-		    
-		                    if (bt->findkey( key, len, NULL, 0 ) == 0) {
-		                        found++;
-		                    }
-		                    else if (bt->err) {
-		                        fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line);
-		                         exit(0);
-		                    }
-		                    len = 0;
-		                }
-		                else if (len < 255) {
-		                    key[len++] = ch;
-		                }
-		            }   // end while
-		        }
-		
-		        fprintf( stderr, "finished %s for %d keys, found %d\n", args->infile, line, found );
-		        break;
-		    }
-		    case 's': {
-		        fprintf( stderr, "started scanning\n" );
-		        do {
-		            if ( (set->pool = bt->mgr->pinpool( page_no )) ) {
-		                set->page = bt->mgr->page( set->pool, page_no );
-		            }
-		            else {
-		                break;
-		            }
-		            set->latch = bt->mgr->pinlatch( page_no );
-		            bt->mgr->lockpage( LockRead, set->latch );
-		            next = BLTVal::getid( set->page->right );
-		            cnt += set->page->act;
-		
-		            for (unsigned int slot = 0; slot++ < set->page->cnt; ) {
-		                if (next || slot < set->page->cnt) {
-		                    if (!slotptr(set->page, slot)->dead) {
-		                        ptr = keyptr(set->page, slot);
-		                        fwrite( ptr->key, ptr->len, 1, stdout );
-		                        fputc( ' ', stdout );
-		                        fputc( '-', stdout );
-		                        fputc( '>', stdout );
-		                        fputc( ' ', stdout );
-		                        val = valptr( set->page, slot );
-		                        fwrite( val->value, val->len, 1, stdout );
-		                        fputc( '\n', stdout );
-		                    }
-		                }
-		            }
-		            bt->mgr->unlockpage( LockRead, set->latch );
-		            bt->mgr->unpinlatch( set->latch );
-		            bt->mgr->unpinpool( set->pool );
-		        } while ( (page_no = next) );
-		
-		        cnt--;    // remove stopper key
-		        fprintf(stderr, " Total keys read %d\n", cnt);
-		        break;
-		    }
-		    case 'c':
-		        //posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
-		
-		        fprintf(stderr, "started counting\n");
-		        next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
-		        page_no = LEAF_page;
-		
-		        while (page_no < BLTVal::getid( bt->mgr->latchmgr->alloc->right )) {
-		            uid off = page_no << bt->mgr->page_bits;
-		            pread( bt->mgr->idx, bt->frame, bt->mgr->page_size, off );
-		            if (!bt->frame->free && !bt->frame->lvl) {
-		                cnt += bt->frame->act;
-		            }
-		            if (page_no > LEAF_page) {
-		                next = page_no + 1;
-		            }
-		            page_no = next;
-		        }
-		        
-		        cnt--;    // remove stopper key
-		        fprintf( stderr, " Total keys read %d\n", cnt );
-		        break;
-		    }
-		
-		    bt->close();
-		    return NULL;
-		}
+                            if (bt->insertkey( key, len, 0, key, len) ) {
+                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line);
+                                exit( -1 );
+                            }
+                            len = 0;
+                        }
+                        else if (len < 255) {
+                            key[len++] = ch;
+                        }
+                    }
+                }
+                else {
+                    fprintf( stderr, "error opening %s\n", args->infile );
+                }
+        
+                fprintf(stderr, "finished %s for %d keys\n", args->infile, line);
+                break;
+            }
+            case 'd': {
+                fprintf( stderr, "started deleting keys for %s\n", args->infile );
+                if ( (in = fopen( args->infile, "rb" )) ) {
+                    while (ch = getc(in), ch != EOF) {
+                        if( ch == '\n' ) {
+                            line++;
+        
+                            if (bt->deletekey( key, len, 0 )) {
+                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+                                exit( -1 );
+                            }
+                            len = 0;
+                        }
+                        else if (len < 255) {
+                            key[len++] = ch;
+                        }
+                    }
+                }
+                else {
+                    fprintf( stderr, "error opening %s\n", args->infile );
+                }
+        
+                fprintf(stderr, "finished %s for keys, %d \n", args->infile, line);
+                break;
+            }
+            case 'f': {
+                fprintf( stderr, "started finding keys for %s\n", args->infile );
+                if ( (in = fopen( args->infile, "rb" )) ) {
+                    while( ch = getc(in), ch != EOF ) {
+                        if (ch == '\n') {
+                            line++;
+            
+                            if (bt->findkey( key, len, NULL, 0 ) == 0) {
+                                found++;
+                            }
+                            else if (bt->err) {
+                                fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line);
+                                 exit(0);
+                            }
+                            len = 0;
+                        }
+                        else if (len < 255) {
+                            key[len++] = ch;
+                        }
+                    }   // end while
+                }
+        
+                fprintf( stderr, "finished %s for %d keys, found %d\n", args->infile, line, found );
+                break;
+            }
+            case 's': {
+                fprintf( stderr, "started scanning\n" );
+                do {
+                    if ( (set->pool = bt->mgr->pinpool( page_no )) ) {
+                        set->page = bt->mgr->page( set->pool, page_no );
+                    }
+                    else {
+                        break;
+                    }
+                    set->latch = bt->mgr->pinlatch( page_no );
+                    bt->mgr->lockpage( LockRead, set->latch );
+                    next = BLTVal::getid( set->page->right );
+                    cnt += set->page->act;
+        
+                    for (unsigned int slot = 0; slot++ < set->page->cnt; ) {
+                        if (next || slot < set->page->cnt) {
+                            if (!slotptr(set->page, slot)->dead) {
+                                ptr = keyptr(set->page, slot);
+                                fwrite( ptr->key, ptr->len, 1, stdout );
+                                fputc( ' ', stdout );
+                                fputc( '-', stdout );
+                                fputc( '>', stdout );
+                                fputc( ' ', stdout );
+                                val = valptr( set->page, slot );
+                                fwrite( val->value, val->len, 1, stdout );
+                                fputc( '\n', stdout );
+                            }
+                        }
+                    }
+                    bt->mgr->unlockpage( LockRead, set->latch );
+                    bt->mgr->unpinlatch( set->latch );
+                    bt->mgr->unpinpool( set->pool );
+                } while ( (page_no = next) );
+        
+                cnt--;    // remove stopper key
+                fprintf(stderr, " Total keys read %d\n", cnt);
+                break;
+            }
+            case 'c':
+                //posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
+        
+                fprintf(stderr, "started counting\n");
+                next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
+                page_no = LEAF_page;
+        
+                while (page_no < BLTVal::getid( bt->mgr->latchmgr->alloc->right )) {
+                    uid off = page_no << bt->mgr->page_bits;
+                    pread( bt->mgr->idx, bt->frame, bt->mgr->page_size, off );
+                    if (!bt->frame->free && !bt->frame->lvl) {
+                        cnt += bt->frame->act;
+                    }
+                    if (page_no > LEAF_page) {
+                        next = page_no + 1;
+                    }
+                    page_no = next;
+                }
+                
+                cnt--;    // remove stopper key
+                fprintf( stderr, " Total keys read %d\n", cnt );
+                break;
+            }
+        
+            bt->close();
+            return NULL;
+        }
 
         typedef struct timeval timer;
 
