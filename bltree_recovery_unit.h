@@ -1,5 +1,6 @@
-//@file bltkey_test.cpp
-/*
+//@file bltree_recovery_unit.h
+
+/**
 *    Copyright (C) 2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
@@ -27,29 +28,50 @@
 *    it in the license file.
 */
 
-#ifndef STANDALONE
-#include "mongo/db/storage/bltree/bltkey.h"
-#else
-#include "bltkey.h"
-#endif
+#pragma once
 
-#include <string.h>
-#include <iostream>
-    
-using namespace std;
-using namespace mongo;
+#include <map>
+#include <stack>
+#include <string>
 
-#define BUFSIZE  65536
+#include <boost/scoped_ptr.hpp>
+#include <boost/shared_ptr.hpp>
 
-int main( int argc, char* argv[] ) {
-    char* buf = new char[BUFSIZE];
-    BLTKey* key1 = (BLTKey*)buf;
-    key1->len = 10;
-    memcpy(key1->key, "abcdefghij", 10);
-    BLTKey* key2 = (BLTKey*)(buf+11);
-    key2->len = 10;
-    memcpy(key2->key, "abcdefghik", 10);
-    cout << "cmp(key1, key2) = " << BLTKey::keycmp(key1,key2) << endl;
-    cout << "cmp(key2, key1) = " << BLTKey::keycmp(key2,key1) << endl;
+#include "mongo/base/disallow_copying.h"
+#include "mongo/db/storage/recovery_unit.h"
+
+namespace bltree {
+    class DB;
+    class Snapshot;
+    class WriteBatch;
 }
 
+namespace mongo {
+
+    class BLTreeRecoveryUnit : public RecoveryUnit {
+        MONGO_DISALLOW_COPYING(BLTreeRecoveryUnit);
+    public:
+        BLTreeRecoveryUnit( bltree::DB* db, bool defaultCommit );
+        virtual ~BLTreeRecoveryUnit();
+
+        virtual void  beginUnitOfWork();
+        virtual void  commitUnitOfWork();
+        virtual void  endUnitOfWork();
+        virtual bool  commitIfNeeded( bool force = false );
+        virtual bool  awaitCommit();
+        virtual void* writingPtr( void* data, size_t len );
+        virtual void  syncDataAndTruncateJournal();
+        virtual void  registerChange( Change* change );
+
+        // local api
+        bltree::WriteBatch* writeBatch();
+        const bltree::Snapshot* snapshot();
+
+    private:
+        bltree::DB* _db; // not owned
+        bool _defaultCommit;
+        boost::scoped_ptr<bltree::WriteBatch> _writeBatch; // owned
+        int _depth;
+    };
+
+}

@@ -1,5 +1,9 @@
 
+#ifndef STANDALONE
+#include "mongo/db/storage/bltree/bltval.h"
+#else
 #include "bltval.h"
+#endif
 
 namespace mongo {
 

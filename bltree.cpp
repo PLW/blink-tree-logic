@@ -1,13 +1,49 @@
+//@file bltree.cpp
 
+/*
+*    Copyright (C) 2014 MongoDB Inc.
+*
+*    This program is free software: you can redistribute it and/or  modify
+*    it under the terms of the GNU Affero General Public License, version 3,
+*    as published by the Free Software Foundation.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU Affero General Public License for more details.
+*
+*    You should have received a copy of the GNU Affero General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*    As a special exception, the copyright holders give permission to link the
+*    code of portions of this program with the OpenSSL library under certain
+*    conditions as described in each individual source file and distribute
+*    linked combinations including the program with the OpenSSL library. You
+*    must comply with the GNU Affero General Public License in all respects for
+*    all of the code used other than as permitted herein. If you modify file(s)
+*    with this exception, you may extend this exception to your version of the
+*    file(s), but you are not obligated to do so. If you do not wish to do so,
+*    delete this exception statement from your version. If you delete this
+*    exception statement from all source files in the program, then also delete
+*    it in the license file.
+*/
+
+#ifndef STANDALONE
+#include "mongo/db/storage/bltree/bltree.h"
+#include "mongo/db/storage/bltree/bltval.h"
+#include "mongo/db/storage/bltree/latchmgr.h"
+#include "mongo/db/storage/bltree/bufmgr.h"
+#else
 #include "bltree.h"
 #include "bltval.h"
 #include "latchmgr.h"
 #include "bufmgr.h"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
+#include <iostream>
 #include <memory.h>
-#include <pthread.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -89,7 +125,7 @@ namespace mongo {
     //  push new fence value upwards
     //  @return error code
     //
-    BTERR BLTree::fixfence( PageSet* set, uint lvl ) {
+    Status BLTree::fixfence( PageSet* set, uint lvl ) {
     
         uchar leftkey[256], rightkey[256];
         uchar value[BtId];
@@ -113,19 +149,34 @@ namespace mongo {
         // insert new (now smaller) fence key
         BLTVal::putid( value, page_no );
     
+    #ifndef STANDALONE
+        Status s = insertkey( leftkey+1, *leftkey, lvl+1, value, BtId );
+        if (!s.isOK()) return s;
+    #else
         if (insertkey( leftkey+1, *leftkey, lvl+1, value, BtId )) {
             return (BTERR)mgr->err;
         }
+    #endif
     
         // now delete old fence key
+    #ifndef STANDALONE
+        s = deletekey( rightkey+1, *rightkey, lvl+1 );
+        if (!s.isOK()) return s;
+    #else
         if (deletekey( rightkey+1, *rightkey, lvl+1 )) {
             return (BTERR)mgr->err;
         }
+    #endif
     
         mgr->unlockpage( LockParent, set->latch );
         mgr->unpinlatch( set->latch );
         mgr->unpinpool( set->pool );
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
     }
     
     //
@@ -133,7 +184,7 @@ namespace mongo {
     //  collapse a level from the tree
     //  @return error code
     //
-    BTERR BLTree::collapseroot( PageSet *root ) {
+    Status BLTree::collapseroot( PageSet *root ) {
     
         PageSet child[1];
         uint idx;
@@ -154,7 +205,13 @@ namespace mongo {
                 child->page = mgr->page( child->pool, child->page_no);
             }
             else {
+
+            #ifndef STANDALONE
+                return Status( ErrorCodes::InternalError, "pinpool error in 'collapseroot'" );
+            #else
                 return (BTERR)mgr->err;
+            #endif
+
             }
     
             memcpy( root->page, child->page, mgr->page_size );
@@ -165,7 +222,13 @@ namespace mongo {
         mgr->unlockpage( LockWrite, root->latch );
         mgr->unpinlatch( root->latch );
         mgr->unpinpool( root->pool );
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
+
     }
     
     //
@@ -173,7 +236,7 @@ namespace mongo {
     //  if page becomes empty, delete it from the btree
     //  @return error code
     //
-    BTERR BLTree::deletekey( uchar* key, uint len, uint lvl ) {
+    Status BLTree::deletekey( uchar* key, uint len, uint lvl ) {
     
         uchar lowerfence[256], higherfence[256];
         uint slot, idx, dirty = 0, fence, found0;
@@ -185,7 +248,11 @@ namespace mongo {
             ptr = keyptr(set->page, slot);
         }
         else {
+        #ifndef STANDALONE
+            return Status( ErrorCodes::InternalError, "loadpage error in 'deletekey'" );
+        #else
             return (BTERR)mgr->err;
+        #endif
         }
     
         // are we deleting a fence slot?
@@ -214,6 +281,17 @@ namespace mongo {
     
         // did we delete a fence key in an upper level?
         if (dirty && lvl && set->page->act && fence) {
+
+        #ifndef STANDALONE
+            Status s = fixfence( set, lvl );
+            if (!s.isOK()) {
+                return s;
+            }
+            else {
+                found = found0;
+                return Status::OK();
+            }
+        #else
             if (fixfence( set, lvl )) {
                 return (BTERR)err;
             }
@@ -221,10 +299,23 @@ namespace mongo {
                 found = found0;
                 return (BTERR)0;
             }
+        #endif
+
         }
     
         // is this a collapsed root?
         if (lvl > 1 && set->page_no == ROOT_page && set->page->act == 1) {
+
+        #ifndef STANDALONE
+            Status s = collapseroot( set );
+            if (!s.isOK()) {
+                return s;
+            }
+            else {
+                found = found0;
+                return Status::OK();
+            }
+        #else
             if (collapseroot( set )) {
                 return (BTERR)err;
             }
@@ -232,6 +323,8 @@ namespace mongo {
                 found = found0;
                 return (BTERR)0;
             }
+        #endif
+
         }
     
         // return if page is not empty
@@ -240,7 +333,11 @@ namespace mongo {
             mgr->unpinlatch( set->latch );
             mgr->unpinpool( set->pool );
             found = found0;
+        #ifndef STANDALONE
+            return Status::OK();
+        #else
             return (BTERR)0;
+        #endif
         }
     
         // cache copy of fence key to post in parent
@@ -257,11 +354,23 @@ namespace mongo {
             right->page = mgr->page( right->pool, right->page_no );
         }
         else {
+
+        #ifndef STANDALONE
+            return Status::OK();
+        #else
             return (BTERR)0;
+        #endif
+
         }
     
         if (right->page->kill) {
+
+        #ifndef STANDALONE
+            return Status( ErrorCodes::InternalError, "structural error in 'deletekey'" );
+        #else
             return (BTERR)(err = BTERR_struct);
+        #endif
+
         }
     
         // pull contents of right peer into our empty page
@@ -284,14 +393,24 @@ namespace mongo {
         // redirect higher key directly to our new node contents
         BLTVal::putid( value, set->page_no );
     
+    #ifndef STANDALONE
+        Status s = insertkey( higherfence+1, *higherfence, lvl+1, value, BtId );
+        if (!s.isOK()) return s;
+    #else
         if (insertkey( higherfence+1, *higherfence, lvl+1, value, BtId )) {
             return (BTERR)err;
         }
+    #endif
     
-        //    delete old lower key to our node
+        // delete old lower key to our node
+    #ifndef STANDALONE
+        s = deletekey( lowerfence+1, *lowerfence, lvl+1 );
+        if (!s.isOK()) return s;
+    #else
         if (deletekey( lowerfence+1, *lowerfence, lvl+1 )) {
             return (BTERR)err;
         }
+    #endif
     
         // obtain delete and write locks to right node
         mgr->unlockpage( LockParent, right->latch );
@@ -303,19 +422,24 @@ namespace mongo {
         mgr->unpinlatch( set->latch );
         mgr->unpinpool( set->pool );
         found = found0;
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
+
     }
     
     //
     //  find key in leaf level and
-    //  @return number of value bytes, or -1 if not found
+    //  @return number of value bytes, or 0 if not found
     //
     int BLTree::findkey( uchar* key, uint keylen, uchar* value, uint valmax ) {
         PageSet set[1];
         uint slot;
         BLTKey* ptr;
         BLTVal* val;
-        int ret;
     
         if ( (slot = mgr->loadpage( set, key, keylen, 0, LockRead )) ) {
             ptr = keyptr(set->page, slot);
@@ -325,6 +449,7 @@ namespace mongo {
         }
     
         // if key exists, return TRUE, otherwise FALSE
+        int ret;
         if (!BLTKey::keycmp( ptr, key, keylen )) {
             val = valptr (set->page,slot);
             if (valmax > val->len) {
@@ -333,9 +458,10 @@ namespace mongo {
             memcpy( value, val->value, valmax );
             ret = valmax;
         } else {
-            ret = -1;
+            ret = 0;
         }
     
+        // unlock all locks asserted by 'loadpage'
         mgr->unlockpage( LockRead, set->latch );
         mgr->unpinlatch( set->latch );
         mgr->unpinpool( set->pool );
@@ -414,7 +540,7 @@ namespace mongo {
     //  split the root and raise the height of the btree
     //  @return error code
     //
-    BTERR BLTree::splitroot( PageSet* root, uchar* leftkey, uid page_no2 ) {
+    Status BLTree::splitroot( PageSet* root, uchar* leftkey, uid page_no2 ) {
         uint nxt = mgr->page_size;
         uchar value[BtId];
         uid left;
@@ -422,7 +548,13 @@ namespace mongo {
         // Obtain an empty page to use, and copy the current
         // root contents into it, e.g. lower keys
         if (!(left = mgr->newpage( root->page ))) {
+
+        #ifndef STANDALONE
+            return Status( ErrorCodes::InternalError, "newpage error in 'splitroot'" );
+        #else
             return (BTERR)err;
+        #endif
+
         }
     
         // preserve the page info at the bottom
@@ -460,14 +592,20 @@ namespace mongo {
         mgr->unlockpage( LockWrite, root->latch );
         mgr->unpinlatch( root->latch );
         mgr->unpinpool( root->pool );
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
+
     }
     
     //
     //  split already locked full node
     //  @return err code, with page unlocked
     //
-    BTERR BLTree::splitpage( PageSet* set ) {
+    Status BLTree::splitpage( PageSet* set ) {
         uint cnt = 0, idx = 0, max, nxt = mgr->page_size;
         uchar fencekey[256], rightkey[256];
         uchar value[BtId];
@@ -514,7 +652,13 @@ namespace mongo {
     
         // get new free page and write higher keys to it.
         if ( !(right->page_no = mgr->newpage( frame )) ) {
+
+        #ifndef STANDALONE
+            return Status( ErrorCodes::InternalError, "newpage error in 'splitpage'" );
+        #else
             return (BTERR)err;
+        #endif
+
         }
     
         // update lower keys to continue in old page
@@ -560,28 +704,46 @@ namespace mongo {
     
         // insert new fence for reformulated left block of smaller keys
         BLTVal::putid( value, set->page_no );
+
+    #ifndef STANDALONE
+        Status s = insertkey( fencekey+1, *fencekey, lvl+1, value, BtId );
+        if (!s.isOK()) return s;
+    #else
         if ( insertkey( fencekey+1, *fencekey, lvl+1, value, BtId ) ) {
             return (BTERR)err;
         }
+    #endif
     
         // switch fence for right block of larger keys to new right page
         BLTVal::putid( value, right->page_no );
-        if ( insertkey( rightkey+1, *rightkey, lvl+1, value, BtId )) {
+
+    #ifndef STANDALONE
+        s = insertkey( rightkey+1, *rightkey, lvl+1, value, BtId );
+        if (!s.isOK()) return s;
+    #else
+        if (insertkey( rightkey+1, *rightkey, lvl+1, value, BtId )) {
             return (BTERR)err;
         }
+    #endif
     
         mgr->unlockpage( LockParent, set->latch) ;
         mgr->unpinlatch( set->latch) ;
         mgr->unpinpool( set->pool) ;
         mgr->unlockpage( LockParent, right->latch) ;
         mgr->unpinlatch( right->latch) ;
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
+    
     }
     
     //
     //  Insert new key into the btree at given level.
     //
-    BTERR BLTree::insertkey( uchar* key, uint keylen, uint lvl, uchar* value, uint vallen) {
+    Status BLTree::insertkey( uchar* key, uint keylen, uint lvl, uchar* value, uint vallen) {
     
         PageSet set[1];
         uint slot, idx;
@@ -594,8 +756,14 @@ namespace mongo {
                 ptr = keyptr(set->page, slot);
             }
             else {
+
+            #ifndef STANDALONE
+                return Status( ErrorCodes::InternalError, "loadpage error in 'insertkey'" );
+            #else
                 if (!err) err = BTERR_ovflw;
                 return (BTERR)err;
+            #endif
+
             }
     
             // if key already exists, update id and return
@@ -610,7 +778,13 @@ namespace mongo {
                     mgr->unlockpage( LockWrite, set->latch );
                     mgr->unpinlatch( set->latch );
                     mgr->unpinpool( set->pool );
+
+                #ifndef STANDALONE
+                    return Status::OK();
+                #else
                     return (BTERR)0;
+                #endif
+
                 } else {
                     if (!slotptr(set->page, slot)->dead) {
                         set->page->act--;
@@ -625,9 +799,15 @@ namespace mongo {
                 break;
             }
     
+        #ifndef STANDALONE
+            Status s = splitpage( set );
+            if (!s.isOK()) return s;
+        #else
             if (splitpage( set )) {
                 return (BTERR)err;
             }
+        #endif
+
         }   // end while
     
         // calculate next available slot and copy key into page
@@ -660,7 +840,13 @@ namespace mongo {
         mgr->unlockpage( LockWrite, set->latch );
         mgr->unpinlatch( set->latch );
         mgr->unpinpool( set->pool );
+
+    #ifndef STANDALONE
+        return Status::OK();
+    #else
         return (BTERR)0;
+    #endif
+
     }
     
     //
@@ -750,22 +936,22 @@ namespace mongo {
         for( idx = 1; idx <= mgr->latchmgr->latchdeployed; idx++ ) {
             latch = mgr->latchsets + idx;
             if (*latch->readwr->rin & MASK) {
-                fprintf( stderr, "latchset %d rwlocked for page %.8llx\n", idx, latch->page_no );
+                fprintf( stderr, "latchset %d rwlocked for page %.8lx\n", idx, latch->page_no );
             }
             memset( (ushort *)latch->readwr, 0, sizeof(BLT_RWLock) );
     
             if (*latch->access->rin & MASK) {
-                fprintf( stderr, "latchset %d accesslocked for page %.8llx\n", idx, latch->page_no );
+                fprintf( stderr, "latchset %d accesslocked for page %.8lx\n", idx, latch->page_no );
             }
             memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
     
             if (*latch->parent->rin & MASK) {
-                fprintf( stderr, "latchset %d parentlocked for page %.8llx\n", idx, latch->page_no );
+                fprintf( stderr, "latchset %d parentlocked for page %.8lx\n", idx, latch->page_no );
             }
             memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
     
             if (latch->pin) {
-                fprintf( stderr, "latchset %d pinned for page %.8llx\n", idx, latch->page_no );
+                fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
                 latch->pin = 0;
             }
         }
@@ -781,12 +967,12 @@ namespace mongo {
                 do {
                     latch = mgr->latchsets + idx;
                     if (*(ushort *)latch->busy) {
-                        fprintf( stderr, "latchset %d busylocked for page %.8llx\n", idx, latch->page_no );
+                        fprintf( stderr, "latchset %d busylocked for page %.8lx\n", idx, latch->page_no );
                     }
     
                     *(ushort *)latch->busy = 0;
                     if (latch->pin ) {
-                        fprintf( stderr, "latchset %d pinned for page %.8llx\n", idx, latch->page_no );
+                        fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
                     }
                 } while ( (idx = latch->next) );
             }
@@ -804,7 +990,7 @@ namespace mongo {
                 for( idx = 0; idx++ < frame->cnt - 1; ) {
                     ptr = keyptr(frame, idx+1);
                     if (BLTKey::keycmp( keyptr(frame, idx), ptr->key, ptr->len ) >= 0 ) {
-                        fprintf( stderr, "page %.8llx idx %.2x out of order\n", page_no, idx );
+                        fprintf( stderr, "page %.8lx idx %.2x out of order\n", page_no, idx );
                     }
                 }
                 if( !frame->lvl ) {
@@ -818,5 +1004,45 @@ namespace mongo {
         return (cnt - 1);
     }
 
+    void BLTree::scan( std::ostream& out ) {
+
+        PageSet set[1];
+        uid page_no = LEAF_page;
+        uid next;
+        int count   = 0;
+
+        do {
+            if ( (set->pool = mgr->pinpool( page_no )) ) {
+                set->page = mgr->page( set->pool, page_no );
+            }
+            else {
+                break;
+            }
+            set->latch = mgr->pinlatch( page_no );
+            mgr->lockpage( LockRead, set->latch );
+            next = BLTVal::getid( set->page->right );
+            count += set->page->act;
+
+            for (uint slot = 0; slot++ < set->page->cnt; ) {
+                if (next || slot < set->page->cnt) {
+                    if (!slotptr(set->page, slot)->dead) {
+                        BLTKey* key = keyptr(set->page, slot);
+                        BLTVal* val = valptr( set->page, slot );
+
+                        std::cout << std::string( (char*)key->key, key->len )
+                                  << " -> "
+                                  << std::string( (char*)val->value, val->len )
+                                  << std::endl;
+                    }
+                }
+            }
+            mgr->unlockpage( LockRead, set->latch );
+            mgr->unpinlatch( set->latch );
+            mgr->unpinpool( set->pool );
+        } while ( (page_no = next) );
+
+        std::cout << "Scanned " << (count-1) << " documents" << std::endl;
+    }
 
 }   // namespace mongo
+

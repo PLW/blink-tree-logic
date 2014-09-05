@@ -27,7 +27,11 @@
 *    it in the license file.
 */
 
+#ifndef STANDALONE
+#include "mongo/db/storage/bltree/blterr.h"
+#else
 #include "blterr.h"
+#endif
 
 namespace mongo {
 

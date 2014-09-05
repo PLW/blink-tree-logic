@@ -28,8 +28,8 @@
 */
 
 #ifndef STANDALONE
-#include "mongo/db/storage/mmap_v1/bltree/logger.h"
-#include "mongo/db/storage/mmap_v1/bltree/common.h"
+#include "mongo/db/storage/bltree/logger.h"
+#include "mongo/db/storage/bltree/common.h"
 #include "mongo/util/assert_util.h"
 #else
 #include "logger.h"

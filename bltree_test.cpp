@@ -2,13 +2,13 @@
 #ifndef STANDALONE
 #include "mongo/base/status.h"
 #include "mongo/db/operation_context_noop.h"
-#include "mongo/db/storage/mmap_v1/bltree/common.h"
-#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
-#include "mongo/db/storage/mmap_v1/bltree/bltkey.h"
-#include "mongo/db/storage/mmap_v1/bltree/bltree.h"
-#include "mongo/db/storage/mmap_v1/bltree/bltval.h"
-#include "mongo/db/storage/mmap_v1/bltree/bufmgr.h"
-#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#include "mongo/db/storage/bltree/common.h"
+#include "mongo/db/storage/bltree/blterr.h"
+#include "mongo/db/storage/bltree/bltkey.h"
+#include "mongo/db/storage/bltree/bltree.h"
+#include "mongo/db/storage/bltree/bltval.h"
+#include "mongo/db/storage/bltree/bufmgr.h"
+#include "mongo/db/storage/bltree/logger.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/unittest/unittest.h"
 #else
@@ -19,9 +19,6 @@
 #include "bltval.h"
 #include "bufmgr.h"
 #include "logger.h"
-
-#define Status int
-
 #endif
 
 #include <errno.h>
@@ -102,8 +99,6 @@ namespace mongo {
         static void* indexOp( void* arg ) {
             ThreadArg* args = (ThreadArg *)arg;
 
-            int line  = 0;
-            int found = 0;
             int cnt   = 0;
             int len   = 0;
 
@@ -121,21 +116,32 @@ namespace mongo {
         
             switch(args->type | 0x20) {
             case 'a': {
-                fprintf( stderr, "started latch mgr audit\n" );
+                cout << "started latch mgr audit" << endl;
                 cnt = bt->latchaudit();
-                fprintf( stderr, "finished latch mgr audit, found %d keys\n", cnt );
+                cout << "finished latch mgr audit, found " << cnt << " keys" << endl;
                 break;
             }
             case 'p': {
-                fprintf( stderr, "started pennysort for %s\n", args->infile );
+                cout << "started pennysort for " << args->infile << endl;
+                uint32_t count = 0;
                 if ( (in = fopen( args->infile, "rb" )) ) {
                     while (ch = getc(in), ch != EOF) {
                         if (ch == '\n') {
-                            line++;
-                            if (bt->insertkey( key, 10, 0, key + 10, len - 10) ) {
-                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+                            count++;
+
+                        #ifndef STANDALONE
+                            Status s = bt->insertkey( key, 10, 0, key + 10, len - 10 );
+                            if (!s.isOK()) {
+                                cerr << "Error " << bt->err << " Line: " << count << endl;
                                 exit( -1 );
                             }
+                        #else
+                            if (bt->insertkey( key, 10, 0, key + 10, len - 10 )) {
+                                cerr << "Error " << bt->err << " Line: " << count << endl;
+                                exit( -1 );
+                            }
+                        #endif
+
                             len = 0;
                         }
                         else if (len < 255) {
@@ -144,48 +150,66 @@ namespace mongo {
                     }
                 }
                 else {
-                    fprintf( stderr, "error opening %s\n", args->infile );
+                    cerr << "error opening " << args->infile << endl;
                 }
         
-                fprintf( stderr, "finished %s for %d keys\n", args->infile, line );
+                cout << "finished " << args->infile << " for " << count << " keys" << endl;
                 break;
             }
             case 'w': {
-                fprintf( stderr, "started indexing for %s\n", args->infile );
-                if ( (in = fopen( args->infile, "rb" )) ) {
-                    while (ch = getc(in), ch != EOF) {
-                        if (ch == '\n') {
-                            line++;
-
-                            if (bt->insertkey( key, len, 0, key, len) ) {
-                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line);
-                                exit( -1 );
-                            }
-                            len = 0;
-                        }
-                        else if (len < 255) {
-                            key[len++] = ch;
-                        }
+                cout << "started indexing for" << args->infile << endl;
+                ifstream in( args->infile, ios::in );
+                if (!in.good()) {
+                    cerr << "error opening '" << args->infile << "'" << endl;
+                    break;
+                }
+                string line;
+                while (!in.eof()) {
+                    getline( in, line);
+                    if (0==line.size()) continue;
+                    size_t n = line.find( '\t' );
+                    if (string::npos==n) {
+                        cerr << "bad input line: " << line << endl;
+                        continue;
                     }
+                    string key = line.substr( 0, n );
+                    string val = line.substr( n+1 );
+                    size_t m = line.size() - (n+1);
+
+                #ifndef STANDALONE
+                    Status s = bt->insertkey( (uchar*)key.c_str(), n, 0, (uchar*)val.c_str(), m );
+                    if (!s.isOK()) {
+                        cerr << "Error on line: " << line << endl;
+                    }
+                #else
+                    if (bt->insertkey( (uchar*)key.c_str(), n, 0, (uchar*)val.c_str(), m )) {
+                        cerr << "Error on line: " << line << endl;
+                    }
+                #endif
                 }
-                else {
-                    fprintf( stderr, "error opening %s\n", args->infile );
-                }
-        
-                fprintf(stderr, "finished %s for %d keys\n", args->infile, line);
                 break;
             }
             case 'd': {
-                fprintf( stderr, "started deleting keys for %s\n", args->infile );
+                cout << "started deleting keys for " << args->infile << endl; 
+                uint32_t count = 0;
                 if ( (in = fopen( args->infile, "rb" )) ) {
                     while (ch = getc(in), ch != EOF) {
                         if( ch == '\n' ) {
-                            line++;
+                            count++;
         
-                            if (bt->deletekey( key, len, 0 )) {
-                                fprintf( stderr, "Error %d Line: %d\n", bt->err, line );
+                        #ifndef STANDALONE
+                            Status s = bt->deletekey( key, len, 0 );
+                            if (!s.isOK()) {
+                                cerr << "Error " << bt->err << " Line: " << count << endl;
                                 exit( -1 );
                             }
+                        #else
+                            if (bt->deletekey( key, len, 0 )) {
+                                cerr << "Error " << bt->err << " Line: " << count << endl;
+                                exit( -1 );
+                            }
+                        #endif
+
                             len = 0;
                         }
                         else if (len < 255) {
@@ -194,39 +218,44 @@ namespace mongo {
                     }
                 }
                 else {
-                    fprintf( stderr, "error opening %s\n", args->infile );
+                    cerr << "error opening " << args->infile << endl;
                 }
         
-                fprintf(stderr, "finished %s for keys, %d \n", args->infile, line);
+                cout << "finished " << args->infile << " for " << count << " keys" << endl;
                 break;
             }
             case 'f': {
-                fprintf( stderr, "started finding keys for %s\n", args->infile );
-                if ( (in = fopen( args->infile, "rb" )) ) {
-                    while( ch = getc(in), ch != EOF ) {
-                        if (ch == '\n') {
-                            line++;
-            
-                            if (bt->findkey( key, len, NULL, 0 ) == 0) {
-                                found++;
-                            }
-                            else if (bt->err) {
-                                fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line);
-                                 exit(0);
-                            }
-                            len = 0;
-                        }
-                        else if (len < 255) {
-                            key[len++] = ch;
-                        }
-                    }   // end while
+                cout << "started finding keys for" << args->infile << endl;
+                ifstream in( args->infile, ios::in );
+                if (!in.good()) {
+                    cerr << "error opening '" << args->infile << "'" << endl;
+                    break;
                 }
-        
-                fprintf( stderr, "finished %s for %d keys, found %d\n", args->infile, line, found );
+                string line;
+                uint32_t nlines = 0;
+                uint32_t found = 0;
+                char valbuf[128];
+                uint32_t vallen;
+                while (!in.eof()) {
+                    getline( in, line );
+                    if (0==line.size()) continue;
+                    size_t n = line.find( '\t' );
+                    if (string::npos==n) {
+                        cerr << "bad input line: " << line << endl;
+                        continue;
+                    }
+                    ++nlines;
+                    string key = line.substr( 0, n );
+                    if ( (vallen = bt->findkey( (uchar*)key.c_str(), n, (uchar*)valbuf, 128 )) ) {
+                        cout << key << " -> " << string( valbuf, vallen ) << endl;
+                        found++;
+                    }
+                }
+                cerr << "finished " << args->infile << " for " << nlines << " keys, found " << found << endl;
                 break;
             }
             case 's': {
-                fprintf( stderr, "started scanning\n" );
+                cerr << "started scanning" << endl;
                 do {
                     if ( (set->pool = bt->mgr->pinpool( page_no )) ) {
                         set->page = bt->mgr->page( set->pool, page_no );
@@ -260,13 +289,13 @@ namespace mongo {
                 } while ( (page_no = next) );
         
                 cnt--;    // remove stopper key
-                fprintf(stderr, " Total keys read %d\n", cnt);
+                cout << " Total keys read " << cnt << endl;
                 break;
             }
             case 'c':
                 //posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
         
-                fprintf(stderr, "started counting\n");
+                cout << "started counting" << endl;
                 next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
                 page_no = LEAF_page;
         
@@ -283,7 +312,7 @@ namespace mongo {
                 }
                 
                 cnt--;    // remove stopper key
-                fprintf( stderr, " Total keys read %d\n", cnt );
+                cout << " Total keys read " << cnt  << endl;
                 break;
             }
         
@@ -301,49 +330,55 @@ namespace mongo {
                       uint segBits )     // (i.e.) 32 pages per segment -> 1MB 
         {
             if (poolSize > 65536) {
-                std::cout << "poolSize too large, defaulting to 65536" << std::endl;
+                cout << "poolSize too large, defaulting to 65536" << endl;
                 poolSize = 65536;
             }
             
-            std::cout <<
+            cout <<
                 " dbname = " << dbname <<
                 "\n pageBits = " << pageBits <<
                 "\n poolSize = " << poolSize <<
                 "\n segBits = "  << segBits << std::endl;
         
             if (cmdv.size() != srcv.size()) {
-#ifndef STANDALONE
+
+            #ifndef STANDALONE
                 return Status( ErrorCodes::InternalError,
                                 "Need one command per source key file (per thread)." );
-#else
-                return -1;
-#endif
+            #else
+                return BTERR_struct;
+            #endif
+
             }
         
             for (uint i=0; i<srcv.size(); ++i) {
-                std::cout << " : " << cmdv[i] << " -> " << srcv[i] << std::endl;
+                cout << " : " << cmdv[i] << " -> " << srcv[i] << endl;
             } 
 
             if (cmdv.size() == 1 && cmdv[0]=="Clear") {
                 if (dbname.size()) {
                     remove( dbname.c_str() );
                 }
-#ifndef STANDALONE
+
+            #ifndef STANDALONE
                 return Status::OK();
-#else
-                return 0;
-#endif
+            #else
+                return BTERR_ok;
+            #endif
+
             }
         
             double start = getCpuTime(0);
             uint cnt = srcv.size();
         
             if (cnt > 100) {
-#ifndef STANDALONE
+
+            #ifndef STANDALONE
                 return Status( ErrorCodes::InternalError, "Cmd count exceeds 100." );
-#else
-                return -1;
-#endif
+            #else
+                return BTERR_struct;
+            #endif
+
             }
         
             pthread_t threads[ cnt ];
@@ -378,11 +413,13 @@ namespace mongo {
                                           poolSize );   // hashSize
         
             if (!mgr) {
-#ifndef STANDALONE
+
+            #ifndef STANDALONE
                 return Status( ErrorCodes::InternalError, "Buffer pool create failed." );
-#else
-                return -1;
-#endif
+            #else
+                return BTERR_struct;
+            #endif
+
             }
 
             // start threads
@@ -396,11 +433,13 @@ namespace mongo {
                 args[i].thread = threadNames[ i+1 ];
                 int err = pthread_create( &threads[i], NULL, BLTreeTestDriver::indexOp, &args[i] );
                 if (err) {
-#ifndef STANDALONE
+
+                #ifndef STANDALONE
                     return Status( ErrorCodes::InternalError, "Error creating thread" );
-#else
-                    return -1;
-#endif
+                #else
+                    return BTERR_struct;
+                #endif
+
                 }
             }
         
@@ -438,11 +477,11 @@ namespace mongo {
 
             BufMgr::destroy( mgr );
 
-#ifndef STANDALONE
+        #ifndef STANDALONE
             return Status::OK();
-#else
-            return 0;
-#endif
+        #else
+            return BTERR_ok;
+        #endif
 
         }
     };
@@ -464,73 +503,38 @@ namespace mongo {
         cmdv.push_back( "Clear" );
         srcv.push_back( "" );
         ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
-
-        // one insert thread
-        cmdv.clear();
-        cmdv.push_back( "Write" );
-        srcv.clear();
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
-        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
-
-        // clear db
-        cmdv.clear();
-        srcv.clear();
-        cmdv.push_back( "Clear" );
-        srcv.push_back( "" );
-        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
-
-        // three insert threads
-        cmdv.clear();
-        cmdv.push_back( "Write" );
-        cmdv.push_back( "Write" );
-        cmdv.push_back( "Write" );
-        srcv.clear();
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.2" );
-        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
         */
 
-        // five insert threads
+        // two insert threads
         cmdv.clear();
         srcv.clear();
-
         cmdv.push_back( "Write" );    //[0]
         cmdv.push_back( "Write" );    //[1]
-        cmdv.push_back( "Write" );    //[2]
-        cmdv.push_back( "Write" );    //[3]
-        cmdv.push_back( "Write" );    //[4]
+        srcv.push_back( "/home/paulpedersen/dev/bltree/kv.0" );
+        srcv.push_back( "/home/paulpedersen/dev/bltree/kv.1" );
 
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.2" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.3" );
-        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.4" );
-
-        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 32768, 2 ) );
+        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
 
         // five find threads, two insert threads
         /*
         cmdv.clear();
         srcv.clear();
-
         cmdv.push_back( "Find" );    //[0]
         cmdv.push_back( "Find" );    //[1]
         cmdv.push_back( "Find" );    //[2]
         cmdv.push_back( "Find" );    //[3]
         cmdv.push_back( "Find" );    //[4]
-        //cmdv.push_back( "Write" );    //[5]
-        //cmdv.push_back( "Write" );    //[6]
-
+        cmdv.push_back( "Write" );    //[5]
+        cmdv.push_back( "Write" );    //[6]
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.0" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.1" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.2" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.3" );
         srcv.push_back( "/home/paulpedersen/dev/bltree/keys.4" );
-        //srcv.push_back( "/home/paulpedersen/dev/bltree/keys.5" );
-        //srcv.push_back( "/home/paulpedersen/dev/bltree/keys.6" );
+        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.5" );
+        srcv.push_back( "/home/paulpedersen/dev/bltree/keys.6" );
 
-        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 32768, 1 ) );
+        ASSERT_OK( driver.drive( "testdb", cmdv, srcv, 15, 4096, 5 ) );
         */
 
     }
@@ -620,92 +624,3 @@ int main(int argc, char* argv[] ) {
 }
 #endif
 
-/*
-int main( int argc, char* argv[] ) {
-
-    int idx, cnt, len, slot, err;
-    int segsize, bits = 16;
-    double start, stop;
-    unsigned int poolsize = 0;
-    float elapsed;
-    char key[1];
-
-    pthread_t* threads;
-    ThreadArg* args;
-    mongo::BufMgr* mgr;
-    mongo::BLTKey* ptr;
-    mongo::BLTree*  bt;
-
-    if (argc < 3) {
-        fprintf( stderr, "Usage: %s idx_file Read/Write/Scan/Delete/Find [page_bits mapped_segments seg_bits line_numbers src_file1 src_file2 ... ]\n", argv[0] );
-        fprintf( stderr, "  where page_bits is the page size in bits\n" );
-        fprintf( stderr, "  mapped_segments is the number of mmap segments in buffer pool\n" );
-        fprintf( stderr, "  seg_bits is the size of individual segments in buffer pool in pages in bits\n" );
-        fprintf( stderr, "  src_file1 thru src_filen are files of keys separated by newline\n" );
-        exit(0);
-    }
-
-    start = getCpuTime(0);
-
-    if (argc > 3) {
-        bits = atoi(argv[3]);
-    }
-    if (argc > 4) {
-        poolsize = atoi(argv[4]);
-    }
-    if (!poolsize) {
-        fprintf( stderr, "Warning: no mapped_pool\n" );
-    }
-    if (poolsize > 65535) {
-        fprintf( stderr, "Warning: mapped_pool > 65535 segments\n" );
-    }
-    if (argc > 5) {
-        segsize = atoi(argv[5]);
-    }
-    else {
-        segsize = 4;     // 16 pages per mmap segment
-    }
-
-    printf( "allocate threads\n" );
-    cnt = argc - 7;
-    threads = (pthread_t *)malloc( cnt * sizeof(pthread_t) );
-    args = (ThreadArg *)malloc( cnt * sizeof(ThreadArg) );
-
-    printf( "create bufmgr\n" );
-    mgr = mongo::BufMgr::create( (argv[1]), BT_rw, bits, poolsize, segsize, poolsize / 8 );
-
-    if (!mgr) {
-        fprintf(stderr, "Index Open Error %s\n", argv[1]);
-        exit(-1);
-    }
-
-    // fire off threads
-    printf( "fire off threads\n" );
-    for (idx = 0; idx < cnt; idx++) {
-        args[idx].infile = argv[idx + 7];
-        args[idx].type = argv[2][0];
-        args[idx].mgr = mgr;
-        args[idx].idx = idx;
-        if ( (err = pthread_create( threads + idx, NULL, index_file, args + idx)) ) {
-            fprintf( stderr, "Error creating thread %d\n", err );
-        }
-    }
-
-    // wait for termination
-    printf( "wait for thread termination\n" );
-    for (idx = 0; idx < cnt; idx++ ) {
-        pthread_join( threads[idx], NULL );
-    }
-
-    printf( "print stats\n" );
-    elapsed = getCpuTime(0) - start;
-    fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
-    elapsed = getCpuTime(1);
-    fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
-    elapsed = getCpuTime(2);
-    fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
-
-    mongo::BufMgr::destroy( mgr );
-    
-}
-*/

@@ -3,10 +3,10 @@
 #ifndef STANDALONE
 #include "mongo/platform/basic.h"
 #include "mongo/util/assert_util.h"
-#include "mongo/db/storage/mmap_v1/bltree/common.h"
-#include "mongo/db/storage/mmap_v1/bltree/latchmgr.h"
-#include "mongo/db/storage/mmap_v1/bltree/blterr.h"
-#include "mongo/db/storage/mmap_v1/bltree/logger.h"
+#include "mongo/db/storage/bltree/common.h"
+#include "mongo/db/storage/bltree/latchmgr.h"
+#include "mongo/db/storage/bltree/blterr.h"
+#include "mongo/db/storage/bltree/logger.h"
 #else
 #include "blterr.h"
 #include "common.h"

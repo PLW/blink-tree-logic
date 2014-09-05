@@ -1,4 +1,4 @@
-//@file blterr.h
+//@file XXXX
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -27,24 +27,3 @@
 *    it in the license file.
 */
 
-#pragma once
-
-namespace mongo {
-
-    typedef enum {
-        BLTERR_ok       =  0,
-        BLTERR_notfound =  1,
-        BLTERR_struct   =  2,
-        BLTERR_ovflw    =  3,
-        BLTERR_read     =  4,
-        BLTERR_lock     =  5,
-        BLTERR_hash     =  6,
-        BLTERR_kill     =  7,
-        BLTERR_map      =  8,
-        BLTERR_write    =  9,
-        BLTERR_eof      = 10,
-    } BLTERR;
-
-    extern const char* bltstrerror( int err );
-
-}   // namespace mongo
