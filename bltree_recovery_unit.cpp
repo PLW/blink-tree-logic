@@ -29,131 +29,106 @@
 */
 
 #include "mongo/db/storage/bltree/bltree_recovery_unit.h"
-
-#include <bltree/db.h>
-#include <bltree/slice.h>
-#include <bltree/options.h>
-#include <bltree/write_batch.h>
-
 #include "mongo/util/log.h"
 
 namespace mongo {
 
-    BLTreeRecoveryUnit::BLTreeRecoveryUnit(
-        bltree::DB* db,
-        bool defaultCommit )
-    :
-        _db( db ),
-        _defaultCommit( defaultCommit ),
-        _writeBatch(  ),
-        _depth( 0 ),
-        _snapshot( NULL )
-    {
+    BLTreeRecoveryUnit::BLTreeRecoveryUnit( BLTree* db, bool defaultCommit )
+    : _db( db ), _defaultCommit( defaultCommit ), _depth( 0 ) {}
+
+    BLTreeRecoveryUnit::~BLTreeRecoveryUnit() {
+        if (_defaultCommit) commitUnitOfWork();
     }
 
-    BLTreeRecoveryUnit::~BLTreeRecoveryUnit()
-    {
-        if (_defaultCommit) {
-            commitUnitOfWork();
-        }
-
-        if (_snapshot) {
-            _db->ReleaseSnapshot( _snapshot );
-        }
+    /**
+    *  Recovery unit Semantics:
+    *
+    *  begin() and end() mark the begining and end of a unit of work. Each call
+    *  to begin() must be matched with exactly one call to end(). commit() can be
+    *  called any number of times between begin() and end() but must not be
+    *  called outside.  When end() is called, all changes since the last commit()
+    *  (if any) will be rolled back.
+    *
+    *  If UnitsOfWork nest, (ie) begin() is called twice before a call to end()
+    *  the prior paragraph describes the behavior of the outermost UnitOfWork.
+    *  Inner UnitsOfWork neither commit nor rollback on their own but rely on
+    *  the outermost to do it.  If an inner UnitOfWork commits any changes, it
+    *  is illegal for an outer unit to rollback. If an inner UnitOfWork
+    *  rollsback any changes, it is illegal for an outer UnitOfWork to do
+    *  anything other than rollback.
+    *
+    *  The goal is not to fully support nested transaction, instead we want to
+    *  allow delaying commit on a unit if it is part of a larger atomic unit.
+    *
+    *  RecoveryUnit takes ownership of its changes. The commitUnitOfWork()
+    *  method calls the commit() method of each registered change in order of
+    *  registration. The endUnitOfWork() method calls the rollback() method
+    *  of each registered Change in reverse order of registration. Either
+    *  will unregister and delete the changes.
+    *
+    *  The registerChange() method may only be called when a WriteUnitOfWork
+    *  is active, and may not be called during commit or rollback.
+    */
+    void BLTreeRecoveryUnit::registerChange( Change* change) {
+        change->setDepth( _depth );
+        _changev.push_back( change );
     }
 
-    void BLTreeRecoveryUnit::beginUnitOfWork()
-    {
-        _depth++;
+    void BLTreeRecoveryUnit::beginUnitOfWork() {
+        ++_depth;
     }
 
-    void BLTreeRecoveryUnit::commitUnitOfWork()
-    {
-        if (!_writeBatch) {
-            // nothing to be committed
-            return;
+    void BLTreeRecoveryUnit::commitUnitOfWork() {
+        std::vector< Change* >::const_iterator it;
+        for (it = _changev.begin(); it!=_changev.end() ++it) {
+            BLTreeChange change = dynamic_cast<BLTreeChange*>( *it );
+            uassert( -1, NULL!=change );
+            if (0==_depth) {
+                uassert( -1, !change->rolledBack() );
+                change->commit();
+                delete change;
+            }
+            else if (_depth == change.getDepth()) {
+                change->setCommit();
+            }
         }
-
-        bltree::Status status = _db->Write( bltree::WriteOptions(), _writeBatch.get() );
-        if (!status.ok()) {
-            log() << "uh oh: " << status.ToString();
-            invariant( !"bltree write batch commit failed" );
-        }
-
-        _writeBatch->Clear();
-
-        if (_snapshot) {
-            _db->ReleaseSnapshot( _snapshot );
-            _snapshot = _db->GetSnapshot();
-        }
+        changev.clear();
     }
 
-    void BLTreeRecoveryUnit::endUnitOfWork()
-    {
-        _depth--;
-        invariant( _depth >= 0 );
-        if ( _depth == 0 ) {
-            commitUnitOfWork();
+    void BLTreeRecoveryUnit::endUnitOfWork() {
+        --_depth;
+        std::vector< BLTreeChange* >::const_iterator rit;
+        for (it = _changev.rbegin(); rit!=_changev.rend() ++rit) {
+            BLTreeChange change = dynamic_cast<BLTreeChange*>( *it );
+            uassert( -1, NULL!=change );
+            if (0==_depth) {
+                uassert( -1, !change.committed() );
+                change->rollback();
+                delete change;
+            }
+            else if (_depth == change->getDepth()) {
+                change->setRollback();
+            }
         }
+        changev.clear();
     }
 
-    bool BLTreeRecoveryUnit::commitIfNeeded(
-        bool force )
-    {
+    bool BLTreeRecoveryUnit::commitIfNeeded( bool force ) {
         commitUnitOfWork();
         return true;
     }
 
-    bool BLTreeRecoveryUnit::awaitCommit()
-    {
-        // TODO
+    bool BLTreeRecoveryUnit::awaitCommit() {
         return true;
     }
 
-    void* BLTreeRecoveryUnit::writingPtr(
-        void* data,
-        size_t len)
-    {
-        warning() << "BLTreeRecoveryUnit::writingPtr doesn't work";
+    void* BLTreeRecoveryUnit::writingPtr( void* data, size_t len) {
         return data;
     }
 
-    void BLTreeRecoveryUnit::syncDataAndTruncateJournal()
-    {
-        log() << "BLTreeRecoveryUnit::syncDataAndTruncateJournal() does nothing";
+    void BLTreeRecoveryUnit::syncDataAndTruncateJournal() {
+        return;
     }
 
-    // lazily initialized because Recovery Units are sometimes initialized just for reading,
-    // which does not require write batches
-    bltree::WriteBatch* BLTreeRecoveryUnit::writeBatch()
-    {
-        if ( !_writeBatch ) {
-            _writeBatch.reset( new bltree::WriteBatch() );
-        }
+}  // namespace mongo
 
-        return _writeBatch.get();
-    }
-
-    void BLTreeRecoveryUnit::registerChange(
-        Change* change)
-    {
-        // without rollbacks enabled, this is fine.
-        change->commit();
-        delete change;
-    }
-
-    // XXX lazily initialized for now
-    // This is lazily initialized for simplicity so long as we still
-    // have database-level locking. If a method needs to access the snapshot,
-    // and it has not been initialized, then it knows it is the first
-    // method to access the snapshot, and can initialize it before using it.
-    const bltree::Snapshot* BLTreeRecoveryUnit::snapshot()
-    {
-        if ( !_snapshot ) {
-            _snapshot = _db->GetSnapshot();
-        }
-
-        return _snapshot;
-    }
-
-}

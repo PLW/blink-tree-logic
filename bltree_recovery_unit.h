@@ -30,28 +30,39 @@
 
 #pragma once
 
-#include <map>
-#include <stack>
-#include <string>
-
-#include <boost/scoped_ptr.hpp>
-#include <boost/shared_ptr.hpp>
-
 #include "mongo/base/disallow_copying.h"
 #include "mongo/db/storage/recovery_unit.h"
-
-namespace bltree {
-    class DB;
-    class Snapshot;
-    class WriteBatch;
-}
+#include "mongo/db/storage/bltree/bltree.h"
 
 namespace mongo {
 
     class BLTreeRecoveryUnit : public RecoveryUnit {
+
         MONGO_DISALLOW_COPYING(BLTreeRecoveryUnit);
+
     public:
-        BLTreeRecoveryUnit( bltree::DB* db, bool defaultCommit );
+        class BLTreeChange : public RecoveryUnit::Change {
+        public:
+            BLTreeChange() : _depth(0), _commitBit( false ), _rollbackBit( false ) {}
+            virtual ~BLTreeChange() {}
+
+            virtual void rollback();
+            virtual void commit();
+
+            void setDepth( uint depth ) { _depth = depth; }
+            void setCommit() { _commitBit = true; }
+            void setRollback() { _rollbackBit = true; }
+            uint getDepth() const { return _depth; }
+            bool committed() const { return commitBit; }
+            bool rolledBack() const { return rollbackBit; }
+
+        protected:
+            uint _depth;
+            bool _commitBit;
+            bool _rollbackBit;
+        };
+
+        BLTreeRecoveryUnit( BLTree* blt, bool defaultCommit );
         virtual ~BLTreeRecoveryUnit();
 
         virtual void  beginUnitOfWork();
@@ -59,19 +70,16 @@ namespace mongo {
         virtual void  endUnitOfWork();
         virtual bool  commitIfNeeded( bool force = false );
         virtual bool  awaitCommit();
-        virtual void* writingPtr( void* data, size_t len );
         virtual void  syncDataAndTruncateJournal();
         virtual void  registerChange( Change* change );
 
-        // local api
-        bltree::WriteBatch* writeBatch();
-        const bltree::Snapshot* snapshot();
+        // ???????
+        virtual void* writingPtr( void* data, size_t len );
 
     private:
-        bltree::DB* _db; // not owned
+        BLTree* _blt;
         bool _defaultCommit;
-        boost::scoped_ptr<bltree::WriteBatch> _writeBatch; // owned
-        int _depth;
     };
 
-}
+    
+}  // namespace mongo

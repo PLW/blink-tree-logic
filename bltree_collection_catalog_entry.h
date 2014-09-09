@@ -55,7 +55,6 @@ namespace mongo {
         virtual Options   getCollectionOptions  ( OperationContext* ) const;
         virtual int       getTotalIndexCount    ( OperationContext* ) const;
         virtual int       getCompletedIndexCount( OperationContext* ) const;
-        virtual void      getAllIndexes         ( OperationContext*, IndexNameVector* ) const;
         virtual BSONObj   getIndexSpec          ( OperationContext*, const IndexName& ) const;
         virtual bool      isIndexMultikey       ( OperationContext*, const IndexName& ) const;
         virtual bool      setIndexIsMultikey    ( OperationContext*, const IndexName&, bool multikey = true);
@@ -63,19 +62,10 @@ namespace mongo {
         virtual void      setIndexHead          ( OperationContext*, const IndexName&, const IndexHead& );
         virtual bool      isIndexReady          ( OperationContext*, const IndexName& ) const;
         virtual Status    removeIndex           ( OperationContext*, const IndexName& );
-        virtual Status    prepareForIndexBuild  ( OperationContext*, const IndexDescriptor* );
         virtual void      indexBuildSuccess     ( OperationContext*, const IndexName& );
         virtual void      updateTTLSetting      ( OperationContext*, const IndexName&, ExpireSeconds );
-
-        //
-        // internal
-        //
-        
-        // called once when collection is created
-        void createMetadata();
-
-        // called after all indexes have to be dropped 
-        void dropMetadata();
+        virtual void      getAllIndexes         ( OperationContext*, IndexNameVector* ) const;
+        virtual Status    prepareForIndexBuild  ( OperationContext*, const IndexDescriptor* );
 
         const string metadataKey() { return _metaDataKey; }
 
@@ -83,14 +73,15 @@ namespace mongo {
         virtual Metadata getMetadata( OperationContext* ctx ) const;
 
     private:
-        Metadata getMetadata() const;
-        void putMetadata( const Metadata& );
+        Status getMetadata( BLTreeCollectionCatalogEntry::Metadata* ) const;
+        Status putMetadata( const Metadata& )
+        Status dropMetadata()
 
-        // the underlying btree storage
-        BLTreeEngine* _engine;   // not owned
+        // the underlying bltree storage
+        BLTreeEngine* _engine;
 
-        // the name of the btree containing metadata
-        const string _metadataKey;
+        // bltree metadata key 
+        const std::string _metadataKey;
 
         // lock which must be acquired before calling _getMetadata_inlock().
         // Protects the metadata stored in the metadata btree.

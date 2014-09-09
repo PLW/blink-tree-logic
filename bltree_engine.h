@@ -7,7 +7,6 @@
  *    it under the terms of the GNU Affero General Public License, version 3,
  *    as published by the Free Software Foundation.
  *
- *
  *    This program is distributed in the hope that it will be useful,
  *    but WITHOUT ANY WARRANTY; without even the implied warranty of
  *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -33,7 +32,6 @@
 
 #include "mongo/base/status.h"
 #include "mongo/base/disallow_copying.h"
-#include "mongo/bson/ordering.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/storage_engine.h"
 #include "mongo/db/storage/bltree/bltree.h"
@@ -48,40 +46,39 @@ namespace mongo {
         MONGO_DISALLOW_COPYING( BLTreeEngine );
 
     public:
-        BLTreeEngine( const std::string& path );
+        typedef std::string                 KeyString;
+        typedef std::string                 Value;
+        typedef StringData                  DBName;
+        typedef std::vector<std::string>    DBNameList;
 
+        BLTreeEngine( const std::string& path );
         virtual ~BLTreeEngine();
 
-        virtual DatabaseCatalogEntry* getDatabaseCatalogEntry( OperationContext* ctx,
-                                                               const StringData& db );
+        virtual DatabaseCatalogEntry*   getDatabaseCatalogEntry( OperationContext*, const DBName& );
+        virtual void                    listDatabases     ( DBNameList* ) const;
+        virtual int                     flushAllFiles     ( bool sync );
+        virtual RecoveryUnit*           newRecoveryUnit   ( OperationContext* );
+        virtual void                    cleanShutdown     ( OperationContext* );
+        virtual Status                  closeDatabase     ( OperationContext*, const DBName& );
+        virtual Status                  dropDatabase      ( OperationContext*, const DBName& );
+        virtual Status                  repairDatabase    ( OperationContext*, const DBName&,
+                                                                bool preserveClonedFilesOnFailure = false,
+                                                                bool backupOriginalFiles = false );
 
-        virtual RecoveryUnit* newRecoveryUnit( OperationContext* ctx );
-
-        virtual void listDatabases( std::vector<std::string>* out ) const;
-
-        virtual int flushAllFiles(  bool sync );
-
-        virtual void cleanShutdown( OperationContext* ctx );
-
-        virtual Status closeDatabase(  OperationContext* ctx,
-                                       const StringData& db );
-
-        virtual Status dropDatabase(   OperationContext* ctx,
-                                       const StringData& db );
-
-        virtual Status repairDatabase( OperationContext* ctx,
-                                       const std::string& dbName,
-                                       bool preserveClonedFilesOnFailure = false,
-                                       bool backupOriginalFiles = false );
+        //
+        // BLTree specific
+        //
+        Status get      ( const KeyString&, Value& );
+        Status put      ( const KeyString&, const BSONObj& );
+        Status remove   ( const KeyString& );
 
     protected:
         std::string _path;
-        BLTree* _blt;
+        std::map< std::string, BLTree* > _idxMap;
 
     };
 
-
-    struct BLTConfig {
+    struct BLTreeConfig {
         std::string _metaName;      // metadata index file name
         std::string _openMode;      // file open mode "ro" or "rw"
         uint _pageBits;             // lg( page size )
@@ -89,6 +86,6 @@ namespace mongo {
         uint _segBits;              // lg( segment size in pages )
         uint _hashSize;             // segment hash table size
 
-    };
+   };
 
 }

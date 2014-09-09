@@ -204,52 +204,26 @@ namespace mongo {
     // internals
     //
 
-    void BLTreeCollectionCatalogEntry::createMetadata()
+    Status BLTreeCollectionCatalogEntry::getMetadata(
+        OperationContext* ctx,
+        BLTreeCollectionCatalogEntry::Metadata* metadata ) const
     {
         string result;
-        BLTree* blt = _engine->getBLTree( ".blt.meta" );
-        Status status = blt->get( _metadataKey, &result );
-        uassert( -1, "createMetadata error", status.IsNotFound() );
-        Metadata md;
-        md.ns = ns();
-        BSONObj obj = md.toBSON();
-        status = blt->put( _metadataKey, obj.objdata(), obj.objsize() );
-        uassert( -1, "metadata create error", status.ok() );
+        Status status = _engine->get( _metadataKey, &result );
+        if (!status.isOK()) return status;
+        metadata->parse( BSONObj( result.c_str() ) );
+        return Status::OK();
     }
 
-    void BLTreeCollectionCatalogEntry::dropMetadata()
-    {
-        BLTree* blt = _engine->getBLTree( ".blt.meta" );
-        Status status = blt->remove( _metadataKey );
-        uassert( -1, "dropMetadata error", status.ok() );
-    }
-
-    BLTreeCollectionCatalogEntry::Metadata BLTreeCollectionCatalogEntry::getMetadata(
-        OperationContext* ctx ) const
-    {
-        string result;
-        Status status;
-        BLTree* blt = _engine->getBLT( ".blt.meta" );
-        status = blt->get( _metadataKey, &result );
-        uassert( -1, "metadata entry does not exist", !status.IsNotFound() );
-        uassert( -1, "getMetadata error", status.ok() );
-        Metadata md;
-        md.parse( BSONObj( result.c_str() ) );
-        return md;
-    }
-
-    void BLTreeCollectionCatalogEntry::putMetadata(
+    Status BLTreeCollectionCatalogEntry::putMetadata(
         const Metadata& in )
     {
-        Status status;
-        BSONObj obj = in.toBSON();
-        BLTree* blt = _engine->getBLTree( ".blt.meta" );
+        return _engine->put( _metadataKey, in.toBSON() );
+    }
 
-        status = blt->put( _metadataKey,
-                           obj.objdata(),
-                           obj.objsize() );
-
-        uassert( _1, "putMetadata error", status.ok() );
+    Status BLTreeCollectionCatalogEntry::dropMetadata()
+    {
+        return _engine->remove( _metadataKey );
     }
 
 }

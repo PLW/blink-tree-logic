@@ -61,17 +61,16 @@ namespace mongo {
         if (!in.good()) {
             return Status( ErrorCodes::InternalError, "BLTree config file open error" );
         }
-
-        string line;
+        std::string line;
         while (!in.eof()) {
-            getline( in, line );
+            std::getline( in, line );
             if (0==line.length()) continue;
             if ('#'==line[0]) continue;
-            size_t n = line.find( '\t' );
-            if (string::npos == n) continue;
+            std::size_t n = line.find( '\t' );
+            if (std::string::npos == n) continue;
 
-            string key = line.substr( 0, n );
-            string val = line.substr( n+1 );
+            std::string key = line.substr( 0, n );
+            std::string val = line.substr( n+1 );
 
                  if ("metaName"==key) conf->_metaName = path+val;
             else if ("openMode"==key) conf->_openMode = val;
@@ -86,54 +85,57 @@ namespace mongo {
     {
         BLTConfig conf;
         parseConfig( _path, &conf );
-        BufMgr* mgr = BufMgr::create( conf._metaName,
-                                      conf._openMode,
-                                      conf._pageBits,
-                                      conf._poolSize,
-                                      conf._segBits,
-                                      conf._hashSize );
+        BufMgr* mgr = BufMgr::create( conf._metaName, conf._openMode, conf._pageBits,
+                                      conf._poolSize, conf._segBits, conf._hashSize );
         _blt = BLTree::create( mgr );
     }
 
     BLTreeEngine::~BLTreeEngine() {
     }
 
-    Status BLTreeEngine::loadMetadataMap()
+    #define MAX_VALUE_SIZE  65536
+
+    Status get( const KeyString& inputKey, Value& val )
     {
-        std::string key( "collection-catalog" );
-        uint valmax( 65536 );
-        char* value[valmax];
-
-        // pull it out of the metadata store
-        int vallen = _blt->findkey( (uchar*) key.dat(), key.size(), (uchar*)value, valmax );
-        if (vallen >= valmax) {
-            return Status( ErrorCodes::InternalError, "collection-catalog overflow" );
+        char valbuf[ MAX_VALUE_SIZE+1 ];
+        const char* key = inputKey.data();
+        int n = _blt->findkey( (uchar *)key, inputKey.size(), (uchar *)valbuf, MAX_VALUE_SIZE );
+        if (0 == n) {
+            return Status( ErrorCodes::InternalError, "findkey returned empty in 'get'" );
         }
-        value[vallen] = 0;
-
-        // parse into BSON
-        BSONObjBuilder builder;
-        Status s = JParse( value ).parse( builder );
-        if (!s.isOK()) {
-            return Status( ErrorCodes::InternalError, "collection-catalog parse error" );
-        }
-
-        // step through the BSON
-        _collMap.clear();
-        BSONObjIterator it( builder.obj() );
-        while (it.more()) {
-            BSONElement e = it.next();
-            std::string ns = e[ "ns" ].String();
-            _collMap.add( BLTMetadataMapEntry( ns, e ) );
-        }
+        val.assign( valbuf, n );
+        return Status::OK();
     }
 
+    Status put( const KeyString& inputKey, const BSONObj& obj )
+    {
+        const char* key = inputKey.data();
+        std::string val = obj.toString();
+        return _blt->insertkey( (uchar *)key, inputKey.size(), 0, (uchar *)val.data(), val.size() );
+    }
+
+    Status remove( const KeyString& inputKey )
+    {
+        const char* key = inputKey.data();
+        return _blt->deletekey( (uchar *)key, inputKey.size(), 0 );
+    }
+
+    //
+    // StorageEngine interface
+    //
+
+    //
+    // return a new interface to recovery unit
+    // 
     RecoveryUnit* BLTreeEngine::newRecoveryUnit(
         OperationContext* ctx )
     {
-        return new BLTreeRecoveryUnit( /* tbd */ );
+        return new BLTreeRecoveryUnit( ctx );
     }
 
+    // 
+    // list databases stored in this storage engine
+    // 
     Status BLTreeEngine::listDatabases(
         std::vector<std::string>* out ) const
     {
@@ -150,6 +152,9 @@ namespace mongo {
         }
     }
 
+    // 
+    // return the DatabaseCatalogEntry that describes the database
+    //
     DatabaseCatalogEntry* BLTreeEngine::getDatabaseCatalogEntry(
         OperationContext* ctx,
         const StringData& db )
@@ -163,8 +168,10 @@ namespace mongo {
         return dbce.get();
     }
 
-    int BLTreeEngine::flushAllFiles(
-        bool sync )
+    //
+    // @return number of files flushed
+    //
+    int BLTreeEngine::flushAllFiles( bool sync )
     {
         boost::mutex::scoped_lock lk( _entryMapMutex );
         for ( EntryMap::const_iterator i = _entryMap.begin(); i != _entryMap.end(); ++i ) {
@@ -181,7 +188,7 @@ namespace mongo {
         bool preserveClonedFilesOnFailure,
         bool backupOriginalFiles )
     {
-        return Status( ErrorCodes::InternalError, "repairDatabase not yet implemented" );
+        return Status( ErrorCodes::InternalError, "repairDatabase not implemented" );
     }
 
     void BLTreeEngine::cleanShutdown(
@@ -190,6 +197,9 @@ namespace mongo {
         _blt.close();
     }
 
+    // 
+    // close all file handles
+    //
     Status BLTreeEngine::closeDatabase(
         OperationContext* ctx,
         const StringData& db )
@@ -199,6 +209,9 @@ namespace mongo {
         return Status::OK();
     }
 
+    //
+    // delete all data and metadata
+    //
     Status BLTreeEngine::dropDatabase(
         OperationContext* ctx,
         const StringData& db )
