@@ -68,6 +68,23 @@ namespace mongo {
     *
     *  The registerChange() method may only be called when a WriteUnitOfWork
     *  is active, and may not be called during commit or rollback.
+    *
+    *  Case 1:                         Case 2:
+    *
+    *  Begin                           Begin
+    *    c1          <- do               c1          <- do
+    *    c2          <- do               c2          <- do
+    *    Commit                          Commit
+    *    c3          <- do               c3          <- undo
+    *    Begin                           Begin 
+    *      c4        <- undo               c4        <- undo
+    *      c5        <- undo               c5        <- undo
+    *    End                               Commit
+    *    c6          <- do               End
+    *    c7          <- do               c6          <- undo
+    *    Commit                          c7          <- undo
+    *    c8          <- undo             c8          <- undo
+    *  End                             End
     */
     void BLTreeRecoveryUnit::registerChange( Change* change) {
         change->setDepth( _depth );
@@ -83,14 +100,7 @@ namespace mongo {
         for (it = _changev.begin(); it!=_changev.end() ++it) {
             BLTreeChange change = dynamic_cast<BLTreeChange*>( *it );
             uassert( -1, NULL!=change );
-            if (0==_depth) {
-                uassert( -1, !change->rolledBack() );
-                change->commit();
-                delete change;
-            }
-            else if (_depth == change.getDepth()) {
-                change->setCommit();
-            }
+            if (_depth == change.getDepth()) change->commit();
         }
         changev.clear();
     }
@@ -102,7 +112,7 @@ namespace mongo {
             BLTreeChange change = dynamic_cast<BLTreeChange*>( *it );
             uassert( -1, NULL!=change );
             if (0==_depth) {
-                uassert( -1, !change.committed() );
+                if (!change.isCommitted())
                 change->rollback();
                 delete change;
             }
@@ -122,13 +132,10 @@ namespace mongo {
         return true;
     }
 
-    void* BLTreeRecoveryUnit::writingPtr( void* data, size_t len) {
-        return data;
-    }
+    // stubs
+    void* BLTreeRecoveryUnit::writingPtr( void* data, size_t len) { return data; }
+    void BLTreeRecoveryUnit::syncDataAndTruncateJournal() { return; }
 
-    void BLTreeRecoveryUnit::syncDataAndTruncateJournal() {
-        return;
-    }
 
 }  // namespace mongo
 

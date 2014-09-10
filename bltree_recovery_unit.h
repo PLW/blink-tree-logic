@@ -41,6 +41,7 @@ namespace mongo {
         MONGO_DISALLOW_COPYING(BLTreeRecoveryUnit);
 
     public:
+
         class BLTreeChange : public RecoveryUnit::Change {
         public:
             BLTreeChange() : _depth(0), _commitBit( false ), _rollbackBit( false ) {}
@@ -50,11 +51,7 @@ namespace mongo {
             virtual void commit();
 
             void setDepth( uint depth ) { _depth = depth; }
-            void setCommit() { _commitBit = true; }
-            void setRollback() { _rollbackBit = true; }
             uint getDepth() const { return _depth; }
-            bool committed() const { return commitBit; }
-            bool rolledBack() const { return rollbackBit; }
 
         protected:
             uint _depth;
@@ -73,12 +70,12 @@ namespace mongo {
         virtual void  syncDataAndTruncateJournal();
         virtual void  registerChange( Change* change );
 
-        // ???????
+        // this should not be here, stub it out.
         virtual void* writingPtr( void* data, size_t len );
 
     private:
         BLTree* _blt;
-        bool _defaultCommit;
+
     };
 
     

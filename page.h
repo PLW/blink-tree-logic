@@ -28,6 +28,27 @@
 *    it in the license file.
 */
 
+
+/*
+ * This is a derivative work.  The original 'C' source
+ * code was put in the public domain by Karl Malbrain
+ * (malbrain@cal.berkeley.edu.  The original copyright
+ * notice is:
+ *
+ *     This work, including the source code, documentation
+ *     and related data, is placed into the public domain.
+ *
+ *     The orginal author is Karl Malbrain.
+ *
+ *     THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+ *     OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+ *     MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+ *     ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+ *     RESULTING FROM THE USE, MODIFICATION, OR
+ *     REDISTRIBUTION OF THIS SOFTWARE.
+ *
+ */
+
 #pragma once
 
 #ifndef STANDALONE

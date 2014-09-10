@@ -29,11 +29,6 @@
 *    it in the license file.
 */
 
-#include <boost/filesystem/operations.hpp>
-
-#include <bltreedb/db.h>
-#include <bltreedb/slice.h>
-#include <bltreedb/options.h>
 
 #include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/index/index_descriptor.h"
@@ -43,6 +38,8 @@
 #include "mongo/db/storage/bltree/bltree_record_store.h"
 #include "mongo/db/storage/bltree/bltree_recovery_unit.h"
 #include "mongo/unittest/unittest.h"
+
+#include <boost/filesystem/operations.hpp>
 
 using namespace mongo;
 
@@ -74,8 +71,8 @@ namespace mongo {
         BLTreeEngine engine( path );
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.createCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.createCollection( &ctx,
                                                      "test.foo",
                                                      CollectionOptions() );
             ASSERT_OK( status );
@@ -85,16 +82,16 @@ namespace mongo {
         string s = "eliot was here";
 
         {
-            MyOperationContext opCtx( &engine );
+            MyOperationContext ctx( &engine );
             DiskLoc loc;
             {
-                WriteUnitOfWork uow( &opCtx );
-                StatusWith<DiskLoc> res = rs->insertRecord( &opCtx, s.c_str(), s.size() + 1, -1 );
+                WriteUnitOfWork uow( &ctx );
+                StatusWith<DiskLoc> res = rs->insertRecord( &ctx, s.c_str(), s.size() + 1, -1 );
                 ASSERT_OK( res.getStatus() );
                 loc = res.getValue();
             }
 
-            ASSERT_EQUALS( s, rs->dataFor( &opCtx, loc ).data() );
+            ASSERT_EQUALS( s, rs->dataFor( &ctx, loc ).data() );
         }
     }
 
@@ -104,24 +101,24 @@ namespace mongo {
         BLTreeEngine engine( path );
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.createCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.createCollection( &ctx,
                                                      "test.foo",
                                                      CollectionOptions() );
             ASSERT_OK( status );
         }
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.createCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.createCollection( &ctx,
                                                      "test.bar",
                                                      CollectionOptions() );
             ASSERT_OK( status );
         }
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.createCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.createCollection( &ctx,
                                                      "silly.bar",
                                                      CollectionOptions() );
             ASSERT_OK( status );
@@ -140,8 +137,8 @@ namespace mongo {
         }
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.dropCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.dropCollection( &ctx,
                                                    "test.foo" );
             ASSERT_OK( status );
         }
@@ -154,8 +151,8 @@ namespace mongo {
         }
 
         {
-            MyOperationContext opCtx( &engine );
-            Status status = engine.dropCollection( &opCtx,
+            MyOperationContext ctx( &engine );
+            Status status = engine.dropCollection( &ctx,
                                                    "test.foo" );
             ASSERT_NOT_OK( status );
         }
@@ -197,8 +194,8 @@ namespace mongo {
             BLTreeCollectionCatalogEntry coll( &engine, "test.foo" );
             coll.createMetaData();
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT_EQUALS( 0, coll.getTotalIndexCount(&opCtx) );
+                MyOperationContext ctx( &engine );
+                ASSERT_EQUALS( 0, coll.getTotalIndexCount(&ctx) );
             }
 
             BSONObj spec = BSON( "key" << BSON( "a" << 1 ) <<
@@ -208,54 +205,54 @@ namespace mongo {
             IndexDescriptor desc( NULL, "", spec );
 
             {
-                MyOperationContext opCtx( &engine );
-                Status status = coll.prepareForIndexBuild( &opCtx, &desc );
+                MyOperationContext ctx( &engine );
+                Status status = coll.prepareForIndexBuild( &ctx, &desc );
                 ASSERT_OK( status );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT_EQUALS( 1, coll.getTotalIndexCount(&opCtx) );
-                ASSERT_EQUALS( 0, coll.getCompletedIndexCount(&opCtx) );
-                ASSERT( !coll.isIndexReady( &opCtx, "silly" ) );
+                MyOperationContext ctx( &engine );
+                ASSERT_EQUALS( 1, coll.getTotalIndexCount(&ctx) );
+                ASSERT_EQUALS( 0, coll.getCompletedIndexCount(&ctx) );
+                ASSERT( !coll.isIndexReady( &ctx, "silly" ) );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                coll.indexBuildSuccess( &opCtx, "silly" );
+                MyOperationContext ctx( &engine );
+                coll.indexBuildSuccess( &ctx, "silly" );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT_EQUALS( 1, coll.getTotalIndexCount(&opCtx) );
-                ASSERT_EQUALS( 1, coll.getCompletedIndexCount(&opCtx) );
-                ASSERT( coll.isIndexReady( &opCtx, "silly" ) );
+                MyOperationContext ctx( &engine );
+                ASSERT_EQUALS( 1, coll.getTotalIndexCount(&ctx) );
+                ASSERT_EQUALS( 1, coll.getCompletedIndexCount(&ctx) );
+                ASSERT( coll.isIndexReady( &ctx, "silly" ) );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT_EQUALS( DiskLoc(), coll.getIndexHead( &opCtx, "silly" ) );
+                MyOperationContext ctx( &engine );
+                ASSERT_EQUALS( DiskLoc(), coll.getIndexHead( &ctx, "silly" ) );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                coll.setIndexHead( &opCtx, "silly", DiskLoc( 123,321 ) );
+                MyOperationContext ctx( &engine );
+                coll.setIndexHead( &ctx, "silly", DiskLoc( 123,321 ) );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT_EQUALS( DiskLoc(123, 321), coll.getIndexHead( &opCtx, "silly" ) );
-                ASSERT( !coll.isIndexMultikey( &opCtx, "silly" ) );
+                MyOperationContext ctx( &engine );
+                ASSERT_EQUALS( DiskLoc(123, 321), coll.getIndexHead( &ctx, "silly" ) );
+                ASSERT( !coll.isIndexMultikey( &ctx, "silly" ) );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                coll.setIndexIsMultikey( &opCtx, "silly", true );
+                MyOperationContext ctx( &engine );
+                coll.setIndexIsMultikey( &ctx, "silly", true );
             }
 
             {
-                MyOperationContext opCtx( &engine );
-                ASSERT( coll.isIndexMultikey( &opCtx, "silly" ) );
+                MyOperationContext ctx( &engine );
+                ASSERT( coll.isIndexMultikey( &ctx, "silly" ) );
             }
 
         }
@@ -272,9 +269,9 @@ namespace mongo {
             BLTreeEngine engine( path );
 
             {
-                MyOperationContext opCtx( &engine );
-                WriteUnitOfWork uow( &opCtx );
-                Status status = engine.createCollection( &opCtx,
+                MyOperationContext ctx( &engine );
+                WriteUnitOfWork uow( &ctx );
+                Status status = engine.createCollection( &ctx,
                                                      "test.foo",
                                                      CollectionOptions() );
                 ASSERT_OK( status );
@@ -284,18 +281,18 @@ namespace mongo {
             BLTreeRecordStore* rs = engine.getEntry( "test.foo" )->recordStore.get();
 
             {
-                MyOperationContext opCtx( &engine );
+                MyOperationContext ctx( &engine );
 
                 {
-                    WriteUnitOfWork uow( &opCtx );
-                    StatusWith<DiskLoc> res = rs->insertRecord( &opCtx, s.c_str(), s.size() + 1, -1 );
+                    WriteUnitOfWork uow( &ctx );
+                    StatusWith<DiskLoc> res = rs->insertRecord( &ctx, s.c_str(), s.size() + 1, -1 );
                     ASSERT_OK( res.getStatus() );
                     loc = res.getValue();
                     uow.commit();
                 }
 
-                ASSERT_EQUALS( s, rs->dataFor( &opCtx, loc ).data() );
-                engine.cleanShutdown( &opCtx );
+                ASSERT_EQUALS( s, rs->dataFor( &ctx, loc ).data() );
+                engine.cleanShutdown( &ctx );
             }
         }
 
