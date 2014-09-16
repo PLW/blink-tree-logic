@@ -95,7 +95,7 @@ namespace mongo {
 
     #define MAX_VALUE_SIZE  65536
 
-    Status get( const KeyString& inputKey, Value& val )
+    Status BLTreeEngine::get( const KeyString& inputKey, Value& val )
     {
         char valbuf[ MAX_VALUE_SIZE+1 ];
         const char* key = inputKey.data();
@@ -107,14 +107,14 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status put( const KeyString& inputKey, const BSONObj& obj )
+    Status BLTreeEngine::put( const KeyString& inputKey, const BSONObj& obj )
     {
         const char* key = inputKey.data();
         std::string val = obj.toString();
         return _blt->insertkey( (uchar *)key, inputKey.size(), 0, (uchar *)val.data(), val.size() );
     }
 
-    Status remove( const KeyString& inputKey )
+    Status BLTreeEngine::remove( const KeyString& inputKey )
     {
         const char* key = inputKey.data();
         return _blt->deletekey( (uchar *)key, inputKey.size(), 0 );
@@ -133,8 +133,15 @@ namespace mongo {
         return new BLTreeRecoveryUnit( ctx );
     }
 
+    Status BLTreeEngine::loadCollectionMetadata( BLTMetadataMap* collMap ) {
+        // stubbed
+        return Status::OK();
+    }
+
     // 
     // list databases stored in this storage engine
+    // you get this by enumerating all the collections, and
+    // returning the unique set of db prefixes.
     // 
     Status BLTreeEngine::listDatabases(
         std::vector<std::string>* out ) const
@@ -161,11 +168,11 @@ namespace mongo {
     {
         BLTMetadataMap collMap;
         loadCollectionMetadata( &collMap );
-        boost::shared_ptr<BLTreeDatabaseCatalogEntry>& dbce = collMap[ db.toString() ];
-        if ( !dbce ) {
-            dbce = boost::make_shared<BLTreeDatabaseCatalogEntry>( this, db );
+        boost::shared_ptr<BLTreeDatabaseCatalogEntry>& e = collMap[ db.toString() ];
+        if ( !e ) {
+            e = boost::make_shared<BLTreeDatabaseCatalogEntry>( this, db );
         }
-        return dbce.get();
+        return e.get();
     }
 
     //
@@ -173,13 +180,8 @@ namespace mongo {
     //
     int BLTreeEngine::flushAllFiles( bool sync )
     {
-        boost::mutex::scoped_lock lk( _entryMapMutex );
-        for ( EntryMap::const_iterator i = _entryMap.begin(); i != _entryMap.end(); ++i ) {
-            if ( i->second->cfHandle ) {
-                _db->Flush( FlushOptions(), i->second->cfHandle.get() );
-            }
-        }
-        return _entryMap.size();
+        // stubbed
+        return 0;
     }
 
     Status BLTreeEngine::repairDatabase(
@@ -188,6 +190,7 @@ namespace mongo {
         bool preserveClonedFilesOnFailure,
         bool backupOriginalFiles )
     {
+        // stubbed
         return Status( ErrorCodes::InternalError, "repairDatabase not implemented" );
     }
 
@@ -210,7 +213,7 @@ namespace mongo {
     }
 
     //
-    // delete all data and metadata
+    // delete all collections, their metadata, then the database
     //
     Status BLTreeEngine::dropDatabase(
         OperationContext* ctx,
@@ -233,5 +236,37 @@ namespace mongo {
 
         return closeDatabase( ctx, db );
     }
+
+
+    //
+    // internals
+    //
+
+    Status BLTreEngine::listIndexNames(
+        const std::string& path,
+        std::vector< std::string>* indexNames )
+    {
+        namespace fs = boost::filesystem;
+        if (!fs::exists( path )) {
+            return Status( ErrorCodes::InternalError, "path '"+path+"' not found" );
+        }
+        if (!fs::is_directory( path )) {
+            return Status( ErrorCodes::InternalError, "path '"+path+"' is not a directory" );
+        }
+        fs::directory_iterator end_it;
+        for (fs::directory_iterator it( path ); it!=end_it; ++it) {
+            std::string fname = it->path().filename();
+            size_t n = fname.find( "$" );
+            if (n!=std::string::npos) {
+                indexNames->push_back( fname.substr(0,n) );
+            }
+        }
+        return Status::OK();
+    }
+
+    Status BLTreeEngine::createEntries()
+    {
+    }
+
 
 }

@@ -58,11 +58,9 @@ namespace mongo {
         {
             BLTreeEngine engine( path );
         }
-
         {
             BLTreeEngine engine( path );
         }
-
     }
 
     TEST( BLTreeEngineTest, CreateDirect1 ) {
@@ -72,9 +70,7 @@ namespace mongo {
 
         {
             MyOperationContext ctx( &engine );
-            Status status = engine.createCollection( &ctx,
-                                                     "test.foo",
-                                                     CollectionOptions() );
+            Status status = engine.createCollection( &ctx, "test.foo", CollectionOptions() );
             ASSERT_OK( status );
         }
 
@@ -85,7 +81,6 @@ namespace mongo {
             MyOperationContext ctx( &engine );
             DiskLoc loc;
             {
-                WriteUnitOfWork uow( &ctx );
                 StatusWith<DiskLoc> res = rs->insertRecord( &ctx, s.c_str(), s.size() + 1, -1 );
                 ASSERT_OK( res.getStatus() );
                 loc = res.getValue();

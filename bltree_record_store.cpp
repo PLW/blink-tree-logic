@@ -32,13 +32,18 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/bltree/bltree_record_store.h"
 #include "mongo/db/storage/bltree/bltree_recovery_unit.h"
+
+#include <bltree/comparator.h>
+#include <bltree/db.h>
+#include <bltree/options.h>
+
 #include "mongo/util/log.h"
 
 namespace mongo {
 
     BLTreeRecordStore::BLTreeRecordStore(
         const StringData& ns,
-        BLTree* blt,
+        BLTreeEngine* blt,  // not owned here
         bool isCapped,
         int64_t cappedMaxSize,
         int64_t cappedMaxDocs,
@@ -62,21 +67,14 @@ namespace mongo {
             invariant(_cappedMaxDocs == -1);
         }
 
-        // Get next id
-        BLTree::Iterator* iter = _blt->newIterator();
-        iter->seekToEnd();
-        if (iter->valid()) {
-            DiskLoc lastLoc = _makeDiskLoc( iter->key() );
-            _nextIdNum.store( lastLoc.getOfs() + ( uint64_t( lastLoc.a() ) << 32 ) + 1) ;
-        }
-        else {
-            _nextIdNum.store( 1 );
-        }
+        // get next id
+        uint nextId = _blt->getNextId();
 
         // load metadata
         std::string value;
         bool metadataPresent = true;
-        if (!_b;t->get( _numRecordsKey, &value ).isOK()) {
+
+        if (!_blt->get( _numRecordsKey, &value ).isOK()) {
             _numRecords = 0;
             metadataPresent = false;
         }
@@ -101,16 +99,19 @@ namespace mongo {
     {
         uint64_t storageSize;
         BLTree::Range wholeRange( _makeKey( minDiskLoc ), _makeKey( maxDiskLoc ) );
-        _blt->getApproximateSizes( &wholeRange, 1, &storageSize);
+        //_blt->getApproximateSizes( _columnFamily, &wholeRange, 1, &storageSize);
         return static_cast<int64_t>( storageSize );
     }
 
 
-    RecordData BLTreeRecordStore::dataFor( OperationContext* ctx, const DiskLoc& loc) const {
+    RecordData BLTreeRecordStore::dataFor(
+        OperationContext* ctx,
+        const DiskLoc& loc) const
+    {
         std::string value;
         Status status = _blt->get( _makeKey( loc ), &value );
         if ( !status.ok() ) {
-            log() << "bltree Get failed, blowing up: " << status.ToString();
+            log() << "bltree 'get' failed, blowing up: " << status.ToString();
             invariant( false );
         }
         boost::shared_array<char> data( new char[value.size()] );
@@ -119,26 +120,30 @@ namespace mongo {
         return RecordData( data.get(), value.size(), data );
     }
 
-    void BLTreeRecordStore::deleteRecord( OperationContext* ctx, const DiskLoc& dl )
+    void BLTreeRecordStore::deleteRecord(
+        OperationContext* ctx,
+        const DiskLoc& dl )
     {
         BLTreeRecoveryUnit* ru = _getRecoveryUnit( ctx );
         std::string oldValue;
-        _blt->Get( _readOptions( ctx ), _columnFamily, _makeKey( dl ), &oldValue );
+        _blt->get( _readOptions( ctx ), _columnFamily, _makeKey( dl ), &oldValue );
         int oldLength = oldValue.size();
         ru->writeBatch()->Delete( _columnFamily, _makeKey( dl ) );
         _changeNumRecords(ctx, false);
         _increaseDataSize(ctx, -oldLength);
     }
 
-    bool BLTreeRecordStore::cappedAndNeedDelete() const {
+    bool BLTreeRecordStore::cappedAndNeedDelete() const
+    {
         if (!_isCapped) return false;
         if (_dataSize > _cappedMaxSize) return true;
         if ((_cappedMaxDocs != -1) && (_numRecords > _cappedMaxDocs)) return true;
         return false;
     }
 
-    void BLTreeRecordStore::cappedDeleteAsNeeded( OperationContext* ctx) {
-
+    void BLTreeRecordStore::cappedDeleteAsNeeded(
+        OperationContext* ctx)
+    {
         if (!cappedAndNeedDelete()) return;
 
         // This persistent iterator is necessary since you can't read your own writes
@@ -237,7 +242,7 @@ namespace mongo {
             if ( status.IsNotFound() ) {
                 return Status( ErrorCodes::InternalError, "doc not found for in-place update" );
             }
-            log() << "bltree Get failed, blowing up: " << status.ToString();
+            log() << "bltree get failed, blowing up: " << status.ToString();
             invariant( false );
         }
 
@@ -376,7 +381,9 @@ namespace mongo {
         while( !iter->isEOF() ) {
             WriteUnitOfWork wu( ctx );
             DiskLoc loc = iter->getNext();
-            if ( loc < end || ( !inclusive && loc == end)) return;
+            if ( loc < end || ( !inclusive && loc == end))
+                return;
+
             deleteRecord( ctx, loc );
             wu.commit();
         }
@@ -387,9 +394,19 @@ namespace mongo {
     {
         BLTreeRecoveryUnit* ru = _getRecoveryUnit( ctx );
         boost::mutex::scoped_lock dataSizeLk( _dataSizeLock );
-        ru->writeBatch()->remove( _dataSizeKey );
+        ru->writeBatch()->Delete( _metadataColumnFamily, _dataSizeKey );
         boost::mutex::scoped_lock numRecordsLk( _numRecordsLock );
-        ru->writeBatch()->remove( _numRecordsKey );
+        ru->writeBatch()->Delete( _metadataColumnFamily, _numRecordsKey );
+    }
+
+    BLTree::ReadOptions BLTreeRecordStore::_readOptions(
+        OperationContext* ctx ) const
+    {
+        BLTree::ReadOptions options;
+        if ( ctx ) {
+            options.snapshot = _getRecoveryUnit( ctx )->snapshot();
+        }
+        return options;
     }
 
     DiskLoc BLTreeRecordStore::_nextId() {
@@ -401,37 +418,53 @@ namespace mongo {
         return loc;
     }
 
-    std::string BLTreeRecordStore::_makeKey( const DiskLoc& loc ) {
-        return std::string( reinterpret_cast<const char*>( &loc ), sizeof( loc ) );
+    std::string BLTreeRecordStore::_makeKey(
+        const DiskLoc& loc )
+    {
+        return string( reinterpret_cast<const char*>( &loc ), sizeof( loc ) );
     }
 
-    BLTreeRecoveryUnit* BLTreeRecordStore::_getRecoveryUnit( OperationContext* ctx ) {
+    BLTreeRecoveryUnit* BLTreeRecordStore::_getRecoveryUnit(
+        OperationContext* ctx )
+    {
         return dynamic_cast<BLTreeRecoveryUnit*>( ctx->recoveryUnit() );
     }
 
-    DiskLoc BLTreeRecordStore::_makeDiskLoc( const std::string& key ) {
-        return reinterpret_cast<const DiskLoc*>( key.data() )[0];
+    DiskLoc BLTreeRecordStore::_makeDiskLoc(
+        const bltree::Slice& slice )
+    {
+        return reinterpret_cast<const DiskLoc*>( slice.data() )[0];
     }
 
     // XXX make sure these work with rollbacks (I don't think they will)
-    void BLTreeRecordStore::_changeNumRecords( OperationContext* ctx, bool insert ) {
-
+    void BLTreeRecordStore::_changeNumRecords(
+        OperationContext* ctx,
+        bool insert )
+    {
         boost::mutex::scoped_lock lk( _numRecordsLock );
-        _numRecords += (insert ? +1 : -1 );
+
+        if ( insert ) _numRecords++; else _numRecords--;
+
         BLTreeRecoveryUnit* ru = _getRecoveryUnit( ctx );
         const char* nr_ptr = reinterpret_cast<char*>( &_numRecords );
-        ru->writeBatch()->put( _numRecordsKey,
-                               std::string( nr_ptr, sizeof(long long) ) );
+        ru->writeBatch()->Put( _metadataColumnFamily,
+                               bltree::Slice( _numRecordsKey ),
+                               bltree::Slice( nr_ptr, sizeof(long long) ) );
     }
 
-    void BLTreeRecordStore::_increaseDataSize( OperationContext* ctx, int amount ) {
-
+    void BLTreeRecordStore::_increaseDataSize(
+        OperationContext* ctx,
+        int amount )
+    {
         boost::mutex::scoped_lock lk( _dataSizeLock );
+
         _dataSize += amount;
         BLTreeRecoveryUnit* ru = _getRecoveryUnit( ctx );
         const char* ds_ptr = reinterpret_cast<char*>( &_dataSize );
-        ru->writeBatch()->put( _dataSizeKey,
-                               std::string( ds_ptr, sizeof(long long) ) );
+
+        ru->writeBatch()->Put( _metadataColumnFamily,
+                               bltree::Slice( _dataSizeKey ),
+                               bltree::Slice( ds_ptr, sizeof(long long) ) );
     }
 
     // --------
@@ -446,53 +479,61 @@ namespace mongo {
         _rs( rs ),
         _dir( dir ),
         _reseekKeyValid( false ),
-        _iterator( _rs->_blt->newIterator() )
+        _iterator( _rs->_blt->NewIterator( rs->_readOptions(), rs->_columnFamily ) )
     {
         if (start.isNull()) {
-            if (_forward()) _iterator->seekToFirst(); else _iterator->seekToLast();
+            if (_forward()) _iterator->SeekToFirst(); else _iterator->SeekToLast();
         else {
-            _iterator->seek( rs->_makeKey( start ) );
+            _iterator->Seek( rs->_makeKey( start ) );
 
-            if ( !_forward() && !_iterator->valid() ) {
-                _iterator->seekToLast();
+            if ( !_forward() && !_iterator->Valid() ) {
+                _iterator->SeekToLast();
             }
-            else if ( !_forward() && _iterator->valid() &&
+            else if ( !_forward() && _iterator->Valid() &&
                       _makeDiskLoc( _iterator->key() ) != start ) {
-                _iterator->prev();
+                _iterator->Prev();
             }
         }
+
         _checkStatus();
     }
 
-    void BLTreeRecordStore::Iterator::_checkStatus() {
-        if ( !_iterator->status().isOK() ) {
-            log() << "BLTree Iterator Error: " << _iterator->status().toString();
+    void BLTreeRecordStore::Iterator::_checkStatus()
+    {
+        if ( !_iterator->status().ok() ) {
+            log() << "BLTree Iterator Error: " << _iterator->status().ToString();
         }
-        invariant( _iterator->status().isOK() );
+        invariant( _iterator->status().ok() );
     }
 
-    bool BLTreeRecordStore::Iterator::isEOF() {
-        return !_iterator || !_iterator->valid();
+    bool BLTreeRecordStore::Iterator::isEOF()
+    {
+        return !_iterator || !_iterator->Valid();
     }
 
-    DiskLoc BLTreeRecordStore::Iterator::curr() {
-        if ( !_iterator->valid() ) return DiskLoc();
-        std::string key = _iterator->key();
-        return _makeDiskLoc( key );
+    DiskLoc BLTreeRecordStore::Iterator::curr()
+    {
+        if ( !_iterator->Valid() ) return DiskLoc();
+        bltree::Slice slice = _iterator->key();
+        return _makeDiskLoc( slice );
     }
 
-    DiskLoc BLTreeRecordStore::Iterator::getNext() {
-        if ( !_iterator->valid() ) return DiskLoc();
+    DiskLoc BLTreeRecordStore::Iterator::getNext()
+    {
+        if ( !_iterator->Valid() ) return DiskLoc();
         DiskLoc toReturn = curr();
-        if ( _forward() ) _iterator->next(); else _iterator->prev();
+        if ( _forward() ) _iterator->Next(); else _iterator->Prev();
         return toReturn;
     }
 
-    void BLTreeRecordStore::Iterator::invalidate( const DiskLoc& dl ) {
+    void BLTreeRecordStore::Iterator::invalidate(
+        const DiskLoc& dl )
+    {
         _iterator.reset( NULL );
     }
 
-    void BLTreeRecordStore::Iterator::saveState() {
+    void BLTreeRecordStore::Iterator::saveState()
+    {
         if ( !_iterator ) return;
         if ( _iterator->Valid() ) {
             _reseekKey = _iterator->key().ToString();
@@ -506,7 +547,7 @@ namespace mongo {
           _iterator.reset( NULL );
           return true;
         }
-        _iterator.reset( _rs->_blt->newIterator();
+        _iterator.reset( _rs->_blt->NewIterator( _rs->_readOptions(), _rs->_columnFamily ) );
         _checkStatus();
         _iterator->Seek( _reseekKey );
         _checkStatus();
@@ -514,11 +555,14 @@ namespace mongo {
         return true;
     }
 
-    RecordData BLTreeRecordStore::Iterator::dataFor( const DiskLoc& loc ) const {
+    RecordData BLTreeRecordStore::Iterator::dataFor(
+        const DiskLoc& loc ) const
+    {
         return _rs->dataFor( _ctx, loc );
     }
 
-    bool BLTreeRecordStore::Iterator::_forward() const {
+    bool BLTreeRecordStore::Iterator::_forward() const
+    {
         return _dir == CollectionScanParams::FORWARD;
     }
 }

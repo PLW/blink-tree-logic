@@ -46,35 +46,54 @@ namespace mongo {
         MONGO_DISALLOW_COPYING( BLTreeEngine );
 
     public:
-        typedef std::string                 KeyString;
-        typedef std::string                 Value;
-        typedef StringData                  DBName;
-        typedef std::vector<std::string>    DBNameList;
+        typedef std::string               KeyString;
+        typedef std::string               Value;
+        typedef StringData                DBName;
+        typedef std::vector<std::string>  DBNameList;
 
         BLTreeEngine( const std::string& path );
         virtual ~BLTreeEngine();
 
+        virtual void           listDatabases   ( DBNameList* ) const;
+        virtual int            flushAllFiles   ( bool sync );
+        virtual RecoveryUnit*  newRecoveryUnit ( OperationContext* );
+        virtual void           cleanShutdown   ( OperationContext* );
+        virtual Status         closeDatabase   ( OperationContext*, const DBName& );
+        virtual Status         dropDatabase    ( OperationContext*, const DBName& );
+        virtual Status         repairDatabase  ( OperationContext*, const DBName&,
+                                                   bool preserveClonedFilesOnFailure = false,
+                                                   bool backupOriginalFiles = false );
+
         virtual DatabaseCatalogEntry*   getDatabaseCatalogEntry( OperationContext*, const DBName& );
-        virtual void                    listDatabases     ( DBNameList* ) const;
-        virtual int                     flushAllFiles     ( bool sync );
-        virtual RecoveryUnit*           newRecoveryUnit   ( OperationContext* );
-        virtual void                    cleanShutdown     ( OperationContext* );
-        virtual Status                  closeDatabase     ( OperationContext*, const DBName& );
-        virtual Status                  dropDatabase      ( OperationContext*, const DBName& );
-        virtual Status                  repairDatabase    ( OperationContext*, const DBName&,
-                                                                bool preserveClonedFilesOnFailure = false,
-                                                                bool backupOriginalFiles = false );
 
         //
         // BLTree specific
         //
-        Status get      ( const KeyString&, Value& );
-        Status put      ( const KeyString&, const BSONObj& );
-        Status remove   ( const KeyString& );
+        Status get    ( const KeyString&, Value& );
+        Status put    ( const KeyString&, const BSONObj& );
+        Status remove ( const KeyString& );
 
-    protected:
+        struct Entry {
+            boost::scoped_ptr<BLTreeCollectionCatalogEntry> collectionEntry;
+            boost::scoped_ptr<BLTreeRecordStore> recordStore;
+        };
+
+        Entry* getEntry( const StringData& ns );
+        const Entry* getEntry( const StringData& ns ) const;
+
+    private:
+        Status _dropCollection_inlock( OperationContext*, const StringData& ns );
+
+        boost::scoped_ptr<BLTree> _blt;
+        typedef StringMap< boost::shared_ptr<Entry> > EntryMap;
+        EntryMap _entryMap;
+
+        mutable boost::mutex _dbCatalogMapMutex;
+        mutable boost::mutex _entryMapMutex;
+
         std::string _path;
-        std::map< std::string, BLTree* > _idxMap;
+
+        //std::map< std::string, BLTree* > _idxMap;
 
     };
 
