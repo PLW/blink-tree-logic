@@ -78,6 +78,7 @@ namespace mongo {
     */
 
     enum BLTLockMode {
+        LockNone      =  0,
         LockAccess    =  1,
         LockDelete    =  2,
         LockRead      =  4,

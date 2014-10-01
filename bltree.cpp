@@ -65,7 +65,6 @@
 #include <memory.h>
 #include <stddef.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/time.h>
@@ -122,7 +121,7 @@ namespace mongo {
     /**
     *  close and release memory
     */
-    void ~BLTree() {
+    BLTree::~BLTree() {
     #ifdef unix
         if (mem) free( mem );
     #else
@@ -137,12 +136,12 @@ namespace mongo {
     */ 
     BLTree* BLTree::create( BufMgr* bufMgr ) {
     
-        BLTree* tree = malloc( sizeof(BLTree) );
+        BLTree* tree = (BLTree*)malloc( sizeof(BLTree) );
         memset( tree, 0, sizeof(BLTree) );
-        tree->bufMgr = bufMgr;
+        tree->mgr = bufMgr;
     
     #ifdef unix
-        tree->mem = valloc( 2 * bufMgr->page_size );
+        tree->mem = (uchar *)valloc( 2 * bufMgr->page_size );
     #else
         tree->mem = VirtualAlloc( NULL, 2 * bufMgr->page_size, MEM_COMMIT, PAGE_READWRITE );
     #endif
@@ -159,8 +158,8 @@ namespace mongo {
     *  push new fence value upwards
     */
     BLTERR BLTree::fixfence( PageSet* set, uint lvl ) {
-        uchar leftkey[BT_keyarray];
-        uchar rightkey[BT_keyarray];
+        uchar leftkey[KEYARRAY];
+        uchar rightkey[KEYARRAY];
         uchar value[BtId];
         BLTKey* ptr;
         uint idx;
@@ -168,7 +167,7 @@ namespace mongo {
         // remove the old fence value
         ptr = keyptr(set->page, set->page->cnt);
         memcpy( rightkey, ptr, ptr->len + sizeof(BLTKey) );
-        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
+        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
         set->latch->dirty = 1;
     
         // cache new fence value
@@ -194,8 +193,8 @@ namespace mongo {
         }
     
         BufMgr::unlockpage( LockParent, set->latch );
-        unpinlatch( set->latch );
-        return 0;
+        mgr->unpinlatch( set->latch );
+        return BLTERR_ok;
     }
     
     /**
@@ -218,8 +217,8 @@ namespace mongo {
         
             page_no = BLTVal::getid( valptr(root->page, idx)->value );
         
-            if (child->latch = pinlatch( page_no, 1, &reads, &writes )) {
-                child->page = mappage( child->latch );
+            if ( (child->latch = mgr->pinlatch( page_no, 1, &reads, &writes )) ) {
+                child->page = mgr->mappage( child->latch );
             }
             else {
                 return err;
@@ -235,8 +234,8 @@ namespace mongo {
         } while (root->page->lvl > 1 && root->page->act == 1);
         
         BufMgr::unlockpage( LockWrite, root->latch );
-        unpinlatch( root->latch );
-        return 0;
+        mgr->unpinlatch( root->latch );
+        return BLTERR_ok;
     }
     
     /**
@@ -247,8 +246,8 @@ namespace mongo {
     *  returns with page unpinned
     */
     BLTERR BLTree::deletepage( PageSet* set, BLTLockMode mode ) {
-        uchar lowerfence[BT_keyarray];
-        uchar higherfence[BT_keyarray];
+        uchar lowerfence[KEYARRAY];
+        uchar higherfence[KEYARRAY];
         uchar value[BtId];
         uint lvl = set->page->lvl;
         PageSet right[1];
@@ -262,11 +261,11 @@ namespace mongo {
         // obtain lock on right page
         page_no = BLTVal::getid( set->page->right );
     
-        if (right->latch = pinlatch( page_no, 1, &reads, &writes )) {
-            right->page = mappage( right->latch );
+        if ( (right->latch = mgr->pinlatch( page_no, 1, &reads, &writes )) ) {
+            right->page = mgr->mappage( right->latch );
         }
         else {
-            return 0;
+            return BLTERR_ok;
         }
     
         BufMgr::lockpage( LockWrite, right->latch );
@@ -318,16 +317,18 @@ namespace mongo {
         BufMgr::lockpage( LockWrite, right->latch );
         freepage( right );
         BufMgr::unlockpage( LockParent, set->latch );
-        unpinlatch( set->latch );
+        mgr->unpinlatch( set->latch );
         found = 1;
-        return 0;
+        return BLTERR_ok;
     }
     
     
-    //
-    //  find and delete key on page by marking delete flag bit
-    //  if page becomes empty, delete it from the btree
-    //
+    /**
+    *  FUNCTION:  deletekey
+    *
+    *  find and delete key on page by marking delete flag bit
+    *  if page becomes empty, delete it from the btree
+    */
     BLTERR BLTree::deletekey( uchar* key, uint len, uint lvl ) {
         uint slot;
         uint idx;
@@ -337,7 +338,7 @@ namespace mongo {
         BLTKey* ptr;
         BLTVal* val;
     
-        if (slot = loadpage( set, key, len, lvl, LockWrite )) {
+        if (slot = mgr->loadpage( set, key, len, lvl, LockWrite, &reads, &writes )) {
             ptr = keyptr( set->page, slot );
         }
         else {
@@ -345,7 +346,7 @@ namespace mongo {
         }
     
         // if librarian slot, advance to real slot
-        if (slotptr( set->page, slot )->type == Librarian) {
+        if (Slot::Librarian == slotptr( set->page, slot )->type) {
             ptr = keyptr(set->page, ++slot);
         }
     
@@ -356,14 +357,14 @@ namespace mongo {
             if (found = slotptr(set->page, slot)->dead == 0 ) {
                 val = valptr(set->page,slot);
                 slotptr(set->page, slot)->dead = 1;
-                set->page->garbage += ptr->len + val->len + sizeof(BLKey) + sizeof(BLTVal);
+                set->page->garbage += ptr->len + val->len + sizeof(BLTKey) + sizeof(BLTVal);
                 set->page->act--;
         
                 // collapse empty slots beneath the fence
                 while (idx = set->page->cnt - 1) {
                     if (slotptr( set->page, idx )->dead) {
                         *slotptr( set->page, idx ) = *slotptr( set->page, idx + 1 );
-                        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
+                        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
                     }
                     else {
                         break;
@@ -379,7 +380,7 @@ namespace mongo {
             }
             else {
                 found = found;
-                return 0;
+                return BLTERR_ok;
             }
         }
     
@@ -390,36 +391,38 @@ namespace mongo {
             }
             else {
                found = found;
-               return 0;
+               return BLTERR_ok;
             }
         }
     
         // delete empty page
         if( !set->page->act ) {
-            return deletepage( set, 0 );
+            return deletepage( set, LockNone );
         }
         set->latch->dirty = 1;
         BufMgr::unlockpage( LockWrite, set->latch );
-        unpinlatch( set->latch );
+        mgr->unpinlatch( set->latch );
         found = found;
-        return 0;
+        return BLTERR_ok;
     }
     
     BLTKey* BLTree::foundkey() {
         return (BLTKey*)key;
     }
     
-    //
-    // advance to next slot
-    //
+    /**
+    *  FUNCTION:  findnext
+    *
+    *  advance to next slot
+    */
     uint BLTree::findnext( PageSet* set, uint slot ) {
     
         if (slot < set->page->cnt) return slot + 1;
         LatchSet* prevlatch = set->latch;
         uid page_no;
         if (page_no = BLTVal::getid( set->page->right )) {
-            if ( (set->latch = pinlatch( page_no, 1, &reads, &writes )) {
-                set->page = mappage( set->latch );
+            if ( (set->latch = mgr->pinlatch( page_no, 1, &reads, &writes )) ) {
+                set->page = mgr->mappage( set->latch );
             }
             else {
                 return 0;
@@ -433,17 +436,19 @@ namespace mongo {
         // obtain access lock using lock chaining with Access mode
         BufMgr::lockpage( LockAccess, set->latch );
         BufMgr::unlockpage( LockRead, prevlatch );
-        unpinlatch( prevlatch );
+        mgr->unpinlatch( prevlatch );
         BufMgr::lockpage( LockRead, set->latch );
         BufMgr::unlockpage( LockAccess, set->latch );
         return 1;
     }
     
-    //
-    // find unique key or first duplicate key in
-    //   leaf level and return number of value bytes
-    //   or (-1) if not found.  Setup key for foundkey
-    //
+    /**
+    *  FUNCTION:  findkey
+    *
+    *  find unique key or first duplicate key in
+    *  leaf level and return number of value bytes
+    *  or (-1) if not found.  Setup key for foundkey
+    */
     int BLTree::findkey( uchar *key, uint keylen, uchar *value, uint valmax ) {
         PageSet set[1];
         uint len;
@@ -452,12 +457,12 @@ namespace mongo {
         BLTKey *ptr;
         BLTVal *val;
     
-        if ( (slot = loadpage( set, key, keylen, 0, LockRead )) ) {
+        if ( (slot = mgr->loadpage( set, key, keylen, 0, LockRead, &reads, &writes )) ) {
             do {
                 ptr = keyptr(set->page, slot);
             
                 // skip librarian slot place holder
-                if (LIbrarian == slotptr(set->page, slot)->type) {
+                if (Slot::Librarian == slotptr(set->page, slot)->type) {
                     ptr = keyptr(set->page, ++slot);
                 }
             
@@ -465,7 +470,7 @@ namespace mongo {
                 memcpy( key, ptr, ptr->len + sizeof(BLTKey) );
                 len = ptr->len;
             
-                if (Duplicate == slotptr(set->page, slot)->type) {
+                if (Slot::Duplicate == slotptr(set->page, slot)->type) {
                     len -= BtId;
                 }
             
@@ -495,7 +500,7 @@ namespace mongo {
         }
     
         BufMgr::unlockpage( LockRead, set->latch );
-        unpinlatch( set->latch );
+        mgr->unpinlatch( set->latch );
         return ret;
     }
     
@@ -509,7 +514,7 @@ namespace mongo {
     */
     uint BLTree::cleanpage( PageSet* set, uint keylen, uint slot, uint vallen ) {
         uint nxt = mgr->page_size;
-        Page page = set->page;
+        Page* page = set->page;
         uint cnt = 0;
         uint idx = 0;
         uint max = page->cnt;
@@ -552,7 +557,7 @@ namespace mongo {
             // make a librarian slot
             if (idx) {
                 slotptr(page, ++idx)->off = nxt;
-                slotptr(page, idx)->type = Librarian;
+                slotptr(page, idx)->type = Slot::Librarian;
                 slotptr(page, idx)->dead = 1;
             }
     
@@ -583,7 +588,7 @@ namespace mongo {
     *  split the root and raise the height of the btree
     */
     BLTERR BLTree::splitroot( PageSet* root, LatchSet* right) {  
-        uchar leftkey[BT_keyarray];
+        uchar leftkey[KEYARRAY];
         uint nxt = mgr->page_size;
         uchar value[BtId];
         PageSet left[1];
@@ -597,10 +602,10 @@ namespace mongo {
     
         //  Obtain an empty page to use, and copy the current
         //  root contents into it, e.g. lower keys
-        if (newpage( left, root->page )) return err; 
+        if (mgr->newpage( left, root->page, &reads, &writes )) return err; 
     
         left_page_no = left->latch->page_no;
-        unpinlatch( left->latch );
+        mgr->unpinlatch( left->latch );
     
         // preserve the page info at the bottom
         // of higher keys and set rest to zero
@@ -641,10 +646,9 @@ namespace mongo {
     
         // release and unpin root pages
         BufMgr::unlockpage( LockWrite, root->latch );
-        unpinlatch( root->latch );
-    
-        unpinlatch( right );
-        return 0;
+        mgr->unpinlatch( root->latch );
+        mgr->unpinlatch( right );
+        return BLTERR_ok;
     }
     
     
@@ -688,7 +692,7 @@ namespace mongo {
             // add librarian slot
             if (idx) {
                 slotptr( frame, ++idx)->off = nxt;
-                slotptr( frame, idx)->type = Librarian;
+                slotptr( frame, idx)->type = Slot::Librarian;
                 slotptr( frame, idx)->dead = 1;
             }
     
@@ -712,7 +716,7 @@ namespace mongo {
         }
     
         // get new free page and write higher keys to it.
-        if (newpage( right, frame )) {
+        if (mgr->newpage( right, frame, &reads, &writes )) {
             return 0;
         }
     
@@ -727,7 +731,7 @@ namespace mongo {
         cnt = 0;
         idx = 0;
     
-        if (slotptr( frame, max )->type == Librarian) { max--; }
+        if (slotptr( frame, max )->type == Slot::Librarian) { max--; }
     
         // assemble page of smaller keys
         while (cnt++ < max) {
@@ -743,7 +747,7 @@ namespace mongo {
             // add librarian slot
             if (idx) {
                 slotptr(set->page, ++idx)->off = nxt;
-                slotptr(set->page, idx)->type = Librarian;
+                slotptr(set->page, idx)->type = Slot::Librarian;
                 slotptr(set->page, idx)->dead = 1;
             }
     
@@ -768,21 +772,20 @@ namespace mongo {
     *  @return unlocked
     */
     BLTERR BLTree::splitkeys( PageSet* set, LatchSet* right) {
-        uchar leftkey[BT_keyarray];
-        uchar rightkey[BT_keyarray];
+        uchar leftkey[KEYARRAY];
+        uchar rightkey[KEYARRAY];
         uchar value[BtId];
         uint lvl = set->page->lvl;
-        BLTKey *ptr;
     
         // if current page is the root page, split it
         if (ROOT_page == set->latch->page_no) {
             return splitroot( set, right );
         }
     
-        Page* ptr = keyptr(set->page, set->page->cnt);
+        BLTKey* ptr = keyptr(set->page, set->page->cnt);
         memcpy( leftkey, ptr, ptr->len + sizeof(BLTKey) );
     
-        page = mappage( right );
+        Page* page = mgr->mappage( right );
     
         ptr = keyptr(page, page->cnt);
         memcpy (rightkey, ptr, ptr->len + sizeof(BLTKey));
@@ -809,10 +812,10 @@ namespace mongo {
         }
     
         BufMgr::unlockpage( LockParent, set->latch );
-        unpinlatch( set->latch );
+        mgr->unpinlatch( set->latch );
         BufMgr::unlockpage( LockParent, right );
-        unpinlatch( right );
-        return 0;
+        mgr->unpinlatch( right );
+        return BLTERR_ok;
     }
     
     /**
@@ -835,7 +838,7 @@ namespace mongo {
         // if found slot > desired slot and previous slot
         // is a librarian slot, use it
         if (slot > 1) {
-            if (Librarian == slotptr(set->page, slot-1)->type) slot--;
+            if (Slot::Librarian == slotptr(set->page, slot-1)->type) slot--;
         }
     
         // copy value onto page
@@ -877,7 +880,7 @@ namespace mongo {
         if (librarian > 1) {
             node = slotptr( set->page, slot++ );
             node->off = set->page->min;
-            node->type = Librarian;
+            node->type = Slot::Librarian;
             node->dead = 1;
         }
     
@@ -889,12 +892,23 @@ namespace mongo {
     
         if (release) {
             BufMgr::unlockpage( LockWrite, set->latch );
-            unpinlatch( set->latch );
+            mgr->unpinlatch( set->latch );
         }
     
-        return 0;
+        return BLTERR_ok;
     }
-    
+
+    /**
+    *  FUNCTION:  newdup
+    */
+    uid BLTree::newdup() {
+    #ifdef unix
+	    return __sync_fetch_and_add( (ushort*)mgr->pagezero->dups, 1 ) + 1;
+    #else
+	    return _InterlockedIncrement64( mgr->pagezero->dups, 1 );
+    #endif
+    }
+
     /**
     *  FUNCTION: insertkey
     *
@@ -902,10 +916,8 @@ namespace mongo {
     *    either add a new key or update/add an existing one
     */
     BLTERR BLTree::insertkey( uchar* key, uint keylen, uint lvl,
-                              void* value, uint vallen,
-                              uint unique )
-    {
-        uchar newkey[BT_keyarray];
+                              uchar* value, uint vallen, uint uniq ) {
+        uchar newkey[KEYARRAY];
         uint slot;
         uint idx;
         uint len;
@@ -923,18 +935,18 @@ namespace mongo {
         ins->len = keylen;
     
         // is this a non-unique index value?
-        if (unique) {
-          type = Unique;
+        if (uniq) {
+          type = Slot::Unique;
         }
         else {
-            type = Duplicate;
+            type = Slot::Duplicate;
             sequence = newdup();
             BLTVal::putid( ins->key + ins->len + sizeof(BLTKey), sequence );
             ins->len += BtId;
         }
       
         while ( true ) { // find the page and slot for the current key
-            if (slot = loadpage( set, ins->key, ins->len, lvl, LockWrite) )
+            if (slot = mgr->loadpage( set, ins->key, ins->len, lvl, LockWrite, &reads, &writes) )
                 ptr = keyptr(set->page, slot);
             else {
                 if (!err) err = BLTERR_ovflw;
@@ -942,7 +954,7 @@ namespace mongo {
             }
         
             // if librarian slot == found slot, advance to real slot
-            if (Librarian == slotptr(set->page, slot)->type) {
+            if (Slot::Librarian == slotptr(set->page, slot)->type) {
                 if (!BLTKey::keycmp(ptr, key, keylen)) {
                     ptr = keyptr(set->page, ++slot);
                 }
@@ -950,12 +962,12 @@ namespace mongo {
         
             len = ptr->len;
         
-            if (Duplicate == slotptr(set->page, slot)->type) len -= BtId;
+            if (Slot::Duplicate == slotptr(set->page, slot)->type) len -= BtId;
         
             // if inserting a duplicate key or unique key
             //   check for adequate space on the page
             //   and insert the new key before slot.
-            if (unique && (len != ins->len || memcmp( ptr->key, ins->key, ins->len )) || !unique ) {
+            if (uniq && (len != ins->len || memcmp( ptr->key, ins->key, ins->len )) || !uniq ) {
                 if (!(slot = cleanpage( set, ins->len, slot, vallen )) ) {
                     if ( !(entry = splitpage( set )) ) {
                         return err;
@@ -981,8 +993,8 @@ namespace mongo {
                 val->len = vallen;
                 memcpy (val->value, value, vallen);
                 BufMgr::unlockpage( LockWrite, set->latch );
-                unpinlatch( set->latch );
-                return 0;
+                mgr->unpinlatch( set->latch );
+                return BLTERR_ok;
             }
         
             // new update value doesn't fit in existing value area
@@ -1019,27 +1031,13 @@ namespace mongo {
             
             slotptr(set->page, slot)->off = set->page->min;
             BufMgr::unlockpage( LockWrite, set->latch );
-            unpinlatch( set->latch );
-            return 0;
+            mgr->unpinlatch( set->latch );
+            return BLTERR_ok;
     
         }   // end while
     
-        return 0;
+        return BLTERR_ok;
     }
-    
-    struct AtomicMod {
-        uint entry;            // latch table entry number
-        uint slot:30;        // page slot number
-        uint reuse:1;        // reused previous page
-        uint emptied:1;        // page was emptied
-    };
-    
-    struct AtomicKey {
-        uid page_no;        // page number for split leaf
-        void* next;            // next key to insert
-        uint entry;            // latch table entry number
-        uchar leafkey[BT_keyarray];
-    };
     
     /**
     *  FUNCTION: atomicpage
@@ -1061,7 +1059,7 @@ namespace mongo {
     
         if (slot) {
             set->latch = mgr->latchsets + entry;
-            set->page = mappage( set->latch );
+            set->page = mgr->mappage( set->latch );
             return slot;
         }
     
@@ -1070,9 +1068,9 @@ namespace mongo {
         // is located on previous page or split pages
         do {
             set->latch = mgr->latchsets + entry;
-            set->page = mappage( set->latch );
+            set->page = mgr->mappage( set->latch );
     
-            if ( (slot = Page::findslot( set->page, key->key, key->len )) {
+            if ( (slot = Page::findslot( set->page, key->key, key->len )) ) {
                 if( locks[src].reuse ) locks[src].entry = entry;
                 return slot;
             }
@@ -1145,14 +1143,14 @@ namespace mongo {
         while (idx = set->page->cnt - 1) {
             if (slotptr( set->page, idx )->dead) {
                 *slotptr( set->page, idx ) = *slotptr(set->page, idx + 1);
-                memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
+                memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
             } else {
                 break;
             }
         }
     
         set->latch->dirty = 1;
-        return 0;
+        return BLTERR_ok;
     }
     
     /**
@@ -1160,7 +1158,7 @@ namespace mongo {
     *
     *  qsort comparison function
     */
-    int qsortcmp( BLTSlot* slot1, BLTSlot* slot2, Page* page ) {
+    int qsortcmp( Slot* slot1, Slot* slot2, Page* page ) {
         BLTKey* key1 = (BLTKey *)((uchar *)page + slot1->off);
         BLTKey* key2 = (BLTKey *)((uchar *)page + slot2->off);
         return BLTKey::keycmp( key1, key2->key, key2->len );
@@ -1193,13 +1191,13 @@ namespace mongo {
         BLTVal* val;
     
         // one lock per source page entry
-        locks = calloc( source->cnt + 1, sizeof(AtomicMod) );
+        locks = (AtomicMod*)calloc( source->cnt + 1, sizeof(AtomicMod) );
         AtomicKey* head = NULL;
         AtomicKey* tail = NULL;
         AtomicKey* leaf;
     
         // First sort the list of keys into order to prevent deadlocks between threads.
-        qsort_r( slotptr(source,1), source->cnt, sizeof(BLTSlot),
+        qsort_r( slotptr(source,1), source->cnt, sizeof(Slot),
                     (__compar_d_fn_t)qsortcmp, source );
       
         // Validate transaction:
@@ -1228,7 +1226,9 @@ namespace mongo {
             }
         
             if (!slot) { // not on same page as previous op, get page
-                if ( slot = loadpage( set, key->key, key->len, 0, LockAtomic | LockRead )) {
+                if ( slot = mgr->loadpage( set, key->key, key->len, 0,
+                                            (BLTLockMode)(LockAtomic | LockRead),
+                                            &reads, &writes )) {
                     set->latch->split = 0;
                 }
                 else {
@@ -1236,7 +1236,7 @@ namespace mongo {
                 }
             }
         
-            if (Librarian == slotptr( set->page, slot )->type) {
+            if (Slot::Librarian == slotptr( set->page, slot )->type) {
                 // step past librarian slot
                 ptr = keyptr(set->page, ++slot);
             }
@@ -1256,11 +1256,11 @@ namespace mongo {
             }
         
             switch (slotptr( source, src )->type) {
-            case Duplicate: {
+            case Slot::Duplicate: {
                 // tbd
                 break;
             }
-            case Unique: {
+            case Slot::Unique: {
                 if (!slotptr( set->page, slot )->dead) {
         
                     // check : if not fence, or if fence, not infinite
@@ -1279,7 +1279,7 @@ namespace mongo {
                                 if (locks[src].entry) {
                                     set->latch = mgr->latchsets + locks[src].entry;
                                     BufMgr::unlockpage( LockAtomic, set->latch );
-                                    unpinlatch( set->latch );
+                                    mgr->unpinlatch( set->latch );
                                 }
                                 src--;
                             }
@@ -1291,7 +1291,7 @@ namespace mongo {
                 }
                 break;
             }
-            case Delete: {
+            case Slot::Delete: {
                 if (!slotptr( set->page, slot )->dead) {
                     if (ptr->len == key->len) {
                         if (!memcmp( ptr->key, key->key, key->len )) {
@@ -1308,7 +1308,7 @@ namespace mongo {
                     if (locks[src].entry) {
                         set->latch = mgr->latchsets + locks[src].entry;
                         BufMgr::unlockpage( LockAtomic, set->latch );
-                        unpinlatch( set->latch );
+                        mgr->unpinlatch( set->latch );
                     }
                     src--;
                 }
@@ -1334,7 +1334,7 @@ namespace mongo {
     
         // insert or delete each key
         for (uint src = 0; src++ < source->cnt; ) {
-            if (Delete == slotptr( source, src )->type) {
+            if (Slot::Delete == slotptr( source, src )->type) {
                 if (atomicdelete( source, locks, src)) {
                     return -1;
                 }
@@ -1361,7 +1361,7 @@ namespace mongo {
             if (locks[src].reuse) continue;
     
             prev->latch = mgr->latchsets + locks[src].entry;
-            prev->page = mappage( prev->latch );
+            prev->page = mgr->mappage( prev->latch );
         
             // pick-up all splits from original page
             uint split = (next = prev->latch->split);
@@ -1373,7 +1373,7 @@ namespace mongo {
             uint entry; 
             while ( (entry = next) ) {
                 set->latch = mgr->latchsets + entry;
-                set->page = mappage( set->latch );
+                set->page = mgr->mappage( set->latch );
                 next = set->latch->split;
                 set->latch->split = 0;
           
@@ -1403,7 +1403,7 @@ namespace mongo {
                 ptr = keyptr(prev->page,prev->page->cnt); // i.e. fence key
           
                 // leaf is an entry in a fifo queue of level >=1 updates due to splits
-                leaf = malloc( sizeof(AtomicKey) );
+                leaf = (AtomicKey*)malloc( sizeof(AtomicKey) );
                 memcpy( leaf->leafkey, ptr, ptr->len + sizeof(BLTKey) );
                 leaf->page_no = prev->latch->page_no;
                 leaf->entry = prev->latch->entry;
@@ -1442,7 +1442,7 @@ namespace mongo {
         
             // process last page split in chain
             ptr = keyptr( prev->page,prev->page->cnt );
-            leaf = malloc( sizeof(AtomicKey) );
+            leaf = (AtomicKey*)malloc( sizeof(AtomicKey) );
             memcpy( leaf->leafkey, ptr, ptr->len + sizeof(BLTKey) );
             leaf->page_no = prev->latch->page_no;
             leaf->entry = prev->latch->entry;
@@ -1467,7 +1467,7 @@ namespace mongo {
             if (locks[src].reuse) continue;
         
             set->latch = mgr->latchsets + locks[src].entry;
-            set->page = mappage( set->latch );
+            set->page = mgr->mappage( set->latch );
         
             // clear original page split field
             uint split = set->latch->split;
@@ -1485,12 +1485,12 @@ namespace mongo {
             }
         
             if (!split) {
-                unpinlatch( set->latch );
+                mgr->unpinlatch( set->latch );
             }
         }
     
         //  add keys for any pages split during action
-        if ( (leaf = head) )
+        if ( (leaf = head) ) {
             do {
                 ptr = (BLTKey *)leaf->leafkey;
                 BLTVal::putid( value, leaf->page_no );
@@ -1498,8 +1498,8 @@ namespace mongo {
                     return err;
                 }
                 BufMgr::unlockpage( LockParent, mgr->latchsets + leaf->entry );
-                unpinlatch( mgr->latchsets + leaf->entry );
-                tail = leaf->next;
+                mgr->unpinlatch( mgr->latchsets + leaf->entry );
+                tail = (AtomicKey*)leaf->next;
                 free (leaf);
              } while ( (leaf = tail) );
         }
@@ -1540,8 +1540,8 @@ namespace mongo {
             if (!right) break;
             cursor_page = right;
         
-            if (set->latch = pinlatch( right, 1, &reads, &writes )) {
-                set->page = mappage( set->latch );
+            if ( (set->latch = mgr->pinlatch( right, 1, &reads, &writes )) ) {
+                set->page = mgr->mappage( set->latch );
             }
             else {
                 return 0;
@@ -1550,12 +1550,12 @@ namespace mongo {
             BufMgr::lockpage( LockRead, set->latch);
             memcpy( cursor, set->page, mgr->page_size );
             BufMgr::unlockpage( LockRead, set->latch);
-            unpinlatch( set->latch );
+            mgr->unpinlatch( set->latch );
             slot = 0;
       
         } while( 1 );
     
-        return (err = 0);
+        return (err = BLTERR_ok);
     }
     
     /**
@@ -1568,7 +1568,7 @@ namespace mongo {
         uint slot;
     
         // cache page for retrieval
-        if ( (slot = loadpage( set, key, len, 0, LockRead )) {
+        if ( (slot = mgr->loadpage( set, key, len, 0, LockRead, &reads, &writes )) ) {
             memcpy( cursor, set->page, mgr->page_size );
         }
         else {
@@ -1577,13 +1577,13 @@ namespace mongo {
     
         cursor_page = set->latch->page_no;
         BufMgr::unlockpage( LockRead, set->latch );
-        unpinlatch( set->latch );
+        mgr->unpinlatch( set->latch );
         return slot;
     }
     
     
-    BLTKey* BLTree::key( uint slot ) { return keyptr( cursor, slot ); }
-    BLTVal* BLTree::val( uint slot ) { return valptr( cursor,slot ); }
+    BLTKey* BLTree::getKey( uint slot ) { return keyptr( cursor, slot ); }
+    BLTVal* BLTree::getVal( uint slot ) { return valptr( cursor,slot ); }
     
     
     /**
@@ -1594,7 +1594,7 @@ namespace mongo {
         uint cnt = 0;
     
         if (*(ushort *)(mgr->lock)) {
-            std::err <<  "Alloc page locked\n" );
+            std::cerr <<  "Alloc page locked" << std::endl;
         }
     
         *(ushort *)(mgr->lock) = 0;
@@ -1602,28 +1602,28 @@ namespace mongo {
         for (ushort idx = 1; idx <= mgr->latchdeployed; idx++) {
             latch = mgr->latchsets + idx;
             if (*latch->readwr->rin & MASK) {
-                std::err <<  "latchset " << idx << " rwlocked for page "
+                std::cerr <<  "latchset " << idx << " rwlocked for page "
                             << latch->page_no << std::endl;
             }
     
-            memset ((ushort *)latch->readwr, 0, sizeof(RWLock));
+            memset( (ushort *)latch->readwr, 0, sizeof(BLT_RWLock) );
     
             if (*latch->access->rin & MASK) {
-                std::err <<  "latchset " << idx << " accesslocked for page "
+                std::cerr <<  "latchset " << idx << " accesslocked for page "
                             << latch->page_no << std::endl;
             }
     
-            memset ((ushort *)latch->access, 0, sizeof(RWLock));
+            memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
     
             if (*latch->parent->rin & MASK) {
-                std::err <<  "latchset " << idx << " parentlocked for page "
+                std::cerr <<  "latchset " << idx << " parentlocked for page "
                             << latch->page_no << std::endl;
             }
     
-            memset ((ushort *)latch->parent, 0, sizeof(RWLock));
+            memset( (ushort *)latch->parent, 0, sizeof(BLT_RWLock) );
     
             if (latch->pin) {
-                std::err <<  "latchset " << idx << " pinned for page "
+                std::cerr <<  "latchset " << idx << " pinned for page "
                             << latch->page_no << std::endl;
                 latch->pin = 0;
             }
@@ -1631,7 +1631,7 @@ namespace mongo {
     
         for (ushort hashidx = 0; hashidx < mgr->latchhash; hashidx++) {
             if (*(ushort *)(mgr->hashtable[hashidx].latch)) {
-                  std::err <<  "hash entry " << hashidx << " locked" << std::endl;
+                  std::cerr <<  "hash entry " << hashidx << " locked" << std::endl;
             }
       
             *(ushort *)(mgr->hashtable[hashidx].latch) = 0;
@@ -1641,7 +1641,7 @@ namespace mongo {
                 do {
                     latch = mgr->latchsets + idx;
                     if (latch->pin) {
-                        std::err <<  "latchset " << idx << " pinned for page "
+                        std::cerr <<  "latchset " << idx << " pinned for page "
                             << latch->page_no << std::endl;
                     }
                 } while ( (idx = latch->next) );
@@ -1673,7 +1673,7 @@ namespace mongo {
         }
             
         cnt--;    // do not count final 'stopper' key
-        std::err << "Total keys read " << cnt << std::endl;
+        std::cerr << "Total keys read " << cnt << std::endl;
         close();
         return 0;
     }

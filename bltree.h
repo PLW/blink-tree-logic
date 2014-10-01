@@ -52,13 +52,11 @@
 #include "mongo/base/status.h"
 #include "mongo/db/storage/bltree/common.h"
 #include "mongo/db/storage/bltree/blterr.h"
-#include "mongo/db/storage/bltree/bltkey.h"
 #include "mongo/db/storage/bltree/bufmgr.h"
 #include "mongo/db/storage/bltree/page.h"
 #else
 #include "common.h"
 #include "blterr.h"
-#include "bltkey.h"
 #include "bufmgr.h"
 #include "page.h"
 #endif
@@ -69,16 +67,33 @@ namespace mongo {
     //  bltree
     //
 
+    struct AtomicMod {
+	    uint entry;			// latch table entry number
+	    uint slot:30;		// page slot number
+	    uint reuse:1;		// reused previous page
+	    uint emptied:1;		// page was emptied
+    };
+
+    struct AtomicKey {
+	    uid page_no;		// page number for split leaf
+	    void* next;			// next key to insert
+	    uint entry;			// latch table entry number
+	    unsigned char leafkey[KEYARRAY];
+    };
+
+
     class BLTree {
     public:
-        // factory
+        // factory method
         static BLTree* create( BufMgr* mgr );
         void close();
 
+        ~BLTree();
+
     public:
         // index interface
-        int    findkey(   uchar* key, uint keylen, uchar* value, uint valmax );
-        Status insertkey( uchar* key, uint keylen, uint lvl, void* value, uint vallen, uint unique );
+        int    findkey(   uchar* key, uint keylen, uchar* val, uint valmax );
+        Status insertkey( uchar* key, uint keylen, uint lvl, uchar* val, uint vallen, uint uniq );
         Status deletekey( uchar* key, uint keylen, uint lvl );
 
         // transaction support
@@ -93,29 +108,36 @@ namespace mongo {
 
         // for debugging
         uint latchaudit();
-        void scan( std::ostream& );
+        //void scan( std::ostream& );
 
     protected:
         Status fixfence( PageSet* set, uint lvl );
         Status collapseroot( PageSet *root );
         Status splitroot( PageSet* root, LatchSet* right);
-        Status splitpage( PageSet* set );
         Status deletepage( PageSet* set, BLTLockMode mode );
-        uint   cleanpage( Page* page, uint keylen, uint slot, uint vallen );
+        uint   splitpage( PageSet* set );
+        uint   cleanpage( PageSet* set, uint keylen, uint slot, uint vallen );
+
+        // duplicate key tie-breaker, numeric suffix
+        uid newdup();
 
         // atomic support
         uint atomicpage( Page* source, AtomicMod* locks, uint src, PageSet* set);
         Status atomicdelete( Page* source, AtomicMod* locks, uint src );
         Status atomicinsert( Page* source, AtomicMod* locks, uint src );
     
-        Status insertslot( PageSet* set, uint slot, uchar *key, uint keylen,;
+        Status insertslot( PageSet* set, uint slot,
+                                uchar *key, uint keylen,
+                                uchar* value, uint vallen,
+                                uint type, uint release);
+
         Status splitkeys( PageSet* set, LatchSet* right );
 
         uint findnext( PageSet* set, uint slot );
         void freepage( PageSet* set );
 
-        BLTKey* key( uint slot );
-        BLTVal* val( uint slot );
+        BLTKey* getKey( uint slot );
+        BLTVal* getVal( uint slot );
 
     public:
         BufMgr* mgr;                // buffer manager for thread
@@ -124,10 +146,10 @@ namespace mongo {
         uid     cursor_page;        // current cursor page number    
         uchar*  mem;                // frame, cursor, page memory buffer
         int     found;              // last delete or insert was found
-        int     err;                // last error
+        BLTERR  err;                // last error
         uchar   key[KEYARRAY];      // last found complete key
-        int     reads;              // number of reads from the btree
-        int     writes;             // number of reads to   the btree
+        uint     reads;             // number of reads from the btree
+        uint     writes;            // number of reads to   the btree
     };
 
 }   // namespace mongo
