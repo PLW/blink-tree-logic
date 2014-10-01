@@ -1,5 +1,4 @@
 //@file page.h
-
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -27,8 +26,6 @@
 *    exception statement from all source files in the program, then also delete
 *    it in the license file.
 */
-
-
 /*
  * This is a derivative work.  The original 'C' source
  * code was put in the public domain by Karl Malbrain
@@ -57,19 +54,11 @@
 #include "common.h"
 #endif
 
+#include <string.h>
+
 namespace mongo {
 
-    //
-    //  page key slot
-    //
-    struct Slot {
-        uint off:BT_maxbits;        // page offset for key start
-        uint dead:1;                // set for deleted key
-    };
-    
-    // page accessors
-    class BLTKey;
-    class BLTVal;
+    class LatchSet;
 
     #define slotptr(page, slot) \
         (((mongo::Slot *)(page+1)) + (slot-1))
@@ -80,20 +69,122 @@ namespace mongo {
     #define valptr(page, slot) \
         ((mongo::BLTVal *)(keyptr(page,slot)->key + keyptr(page,slot)->len))
 
-    //
-    //  index page
-    //
+    /**
+    * Page key slot definition.
+    */
+    struct Slot {
+        /*
+        *  Slot types:
+        *
+        *  In addition to the Unique keys that occupy slots there are
+        *  Librarian and Duplicate key slots occupying the key slot array.
+        *  The Librarian slots are dead keys that serve as filler, available
+        *  to add new Unique or Dup slots that are inserted into the B-tree.
+        * 
+        *  The Duplicate slots have had their key bytes extended by 6 bytes
+        *  to contain a binary duplicate key uniqueifier.
+        */
+        enum Type {
+            Unique,
+            Librarian,
+            Duplicate,
+            Delete
+        };
+    
+        uint off:MAXBITS;    // key offset
+        uint type:3;         // type of slot
+        uint dead:1;         // Keys are marked dead, but remain on the page until
+                             // cleanup is called. The fence key (highest key) for
+                             // a leaf page is always present, even after cleanup.
+    };
+    
+    /**
+    *  The key structure occupies space at the upper end of each
+    *  page.  It's a length byte followed by the key bytes.
+    */
+    struct BLTKey {
+        /**
+        *  Compare two keys.
+        *  @return  > 0, = 0, or < 0
+        */
+        static int keycmp( BLTKey* key1, uchar* key2, uint len2 ) {
+            uint len1 = key1->len;
+            int ans;
+            if ( (ans = memcmp( key1->key, key2, len1 > len2 ? len2 : len1 )) ) {
+                return ans;
+            }
+            return (len1 > len2 ? 1 : len1 < len2 ? -1 : 0);
+        }
+
+        unsigned char len;          // may change to ushort or uint
+        unsigned char key[0];
+    };
+    
+    /**
+    *  The value structure also occupies space at the upper
+    *  end of the page. Each key is immediately followed by a value.
+    */
+    class BLTVal {
+    public:
+        /**
+        *  FUNCTION:  putid
+        *
+        *  pack pageno values
+        */
+        static void putid( uchar* dest, uid id );
+
+        /**
+        *  FUNCTION:  getid
+        *
+        *  unpack pageno values
+        */
+        static uid getid( uchar* src );
+
+    public:
+        unsigned char len;              // may change to ushort or uint
+        unsigned char value[0];
+    };
+    
+    #define MAXKEY       255            // maximum number of bytes in a key
+    #define KEYARRAY (MAXKEY + sizeof(BLTKey))
+
+    /*
+    *  The first part of an index page.  It is immediately followed
+    *  by the Slot array of keys.
+    * 
+    *  Note: this structure size must be a multiple of 8 bytes in order
+    *  to place dups correctly.
+    */
     class Page {
     public:
-        uint  cnt;              // count of keys in page
-        uint  act;              // count of active keys
-        uint  min;              // next key offset
-        uchar bits:7;           // page size in bits
-        uchar free:1;           // page is on free chain
-        uchar lvl:6;            // level of page
-        uchar kill:1;           // page is being deleted
-        uchar dirty:1;          // page has deleted keys
-        uchar right[BtId];      // page number to right
+        /**
+        *  FUNCTION:  findslot
+        *
+        *  find slot in page for given key at a given level
+        */
+        static int findslot( Page* page, uchar* key, uint keylen );
+
+    public:
+        uint cnt;                       // count of keys in page
+        uint act;                       // count of active keys
+        uint min;                       // next key offset
+        uint garbage;                   // page garbage in bytes
+        unsigned char bits:7;           // page size in bits
+        unsigned char free:1;           // page is on free chain
+        unsigned char lvl:7;            // level of page
+        unsigned char kill:1;           // page is being deleted
+        unsigned char right[BtId];      // page number to right
+    };
+    
+    /**
+    *  The loadpage interface object
+    */
+    class PageSet {
+    public:
+        Page* page;                     // current page pointer
+        LatchSet* latch;                // current page latch set
     };
 
 }   // namespace mongo
+
+

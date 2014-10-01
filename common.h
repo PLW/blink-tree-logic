@@ -1,5 +1,4 @@
 //@file common.h
-
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -32,6 +31,11 @@
 
 #include <stdint.h>
 
+#ifndef unix
+#define _FILE_OFFSET_BITS 64
+#define _LARGEFILE64_SOURCE
+#endif
+
 namespace mongo {
 
     typedef unsigned char       uchar;
@@ -61,18 +65,15 @@ namespace mongo {
     // number of levels to create in a new BTree
     #define MIN_lvl             2
 
-    // number of latch manager slots
-    #define BT_latchtable       1024
-
     // file open modes
     #define BT_ro               0x6f72
     #define BT_rw               0x7772
 
     // min / max page sizes
-    #define BT_minbits          12
-    #define BT_maxbits          24
-    #define BT_minpage          (1 << BT_minbits)
-    #define BT_maxpage          (1 << BT_maxbits)
+    #define MINBITS             12
+    #define MAXBITS             24
+    #define MINPAGE             (1 << MINBITS)
+    #define MAXPAGE             (1 << MAXBITS)
 
 }   // namespace mongo
 

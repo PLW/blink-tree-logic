@@ -26,100 +26,88 @@
 *    exception statement from all source files in the program, then also delete
 *    it in the license file.
 */
-
 /*
-*  This module contains derived code.   The original
-*  copyright notice is as follows:
-*
-*    This work, including the source code, documentation
-*    and related data, is placed into the public domain.
-*  
-*    The orginal author is Karl Malbrain (malbrain@cal.berkeley.edu)
-*  
-*    THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
-*    OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
-*    MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
-*    ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
-*    RESULTING FROM THE USE, MODIFICATION, OR
-*    REDISTRIBUTION OF THIS SOFTWARE.
-*/
+ * This is a derivative work.  The original 'C' source
+ * code was put in the public domain by Karl Malbrain
+ * (malbrain@cal.berkeley.edu.  The original copyright
+ * notice is:
+ *
+ *     This work, including the source code, documentation
+ *     and related data, is placed into the public domain.
+ *
+ *     The orginal author is Karl Malbrain.
+ *
+ *     THIS SOFTWARE IS PROVIDED AS-IS WITHOUT WARRANTY
+ *     OF ANY KIND, NOT EVEN THE IMPLIED WARRANTY OF
+ *     MERCHANTABILITY. THE AUTHOR OF THIS SOFTWARE,
+ *     ASSUMES _NO_ RESPONSIBILITY FOR ANY CONSEQUENCE
+ *     RESULTING FROM THE USE, MODIFICATION, OR
+ *     REDISTRIBUTION OF THIS SOFTWARE.
+ *
+ */
 
+#ifndef STANDALONE
+#include "mongo/db/storage/bltree/common.h"
+#include "mongo/db/storage/bltree/page.h"
+#else
+#include "common.h"
 #include "page.h"
-#include "blterr.h"
+#endif
 
-#include <errno.h>
-#include <iostream>
-#include <iomanip>
-#include <memory.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
-   
 namespace mongo {
-    /*
-    *  Pages are managed as heaps:  key offsets and record-id's are allocated from
-    *  the bottom, while the text of the keys are allocated from the top.  When
-    *  the two areas meet, the page is full and it needs to be split.
-    *
-    *  When the root page fills, it is split in two and the tree height is raised
-    *  by a new root at page one with two keys.
-    *
-    *  A key consists of a length byte, two bytes of index number (0 - 65534),
-    *  and up to 253 bytes of key value.  Duplicate keys are discarded.
-    *  Associated with each key is a 48 bit docid.
-    *
-    *  The bltindex pages are linked with right pointers to facilitate enumerators,
-    *  and provide for concurrency.
-    *
-    *  Deleted keys are tombstoned with a dead bit until page cleanup. The fence key
-    *  for a node is always present, even after deletion and cleanup.
-    *
-    *  Deleted leaf pages are reclaimed on a free list.
-    *  The upper levels of the bltindex are fixed on creation.
-    *
-    *  Page slots use 1-based indexing.
-    */
 
-    // debugging output
-
-    std::ostream& operator<<( std::ostream& os, const DiskLoc& loc ) {
-        return os <<
-            "DiskLoc[ fileno = " << std::setw(5) << loc.fileno <<
-                     ", offset = " << std::setw(15) << loc.offset << ']';
-    }
-
-    std::ostream& operator<<( std::ostream& os, const Slot& slot ) {
-        return os <<
-            "Slot["
-            " offset = " << (uint32_t)slot._off <<
-            ", dead bit = " << (bool)slot._dead << ']';
-    }
-
-    std::ostream& operator<<( std::ostream& os, const Page& page ) {
-        os <<
-            "Page["
-            "\n  key count = "   << page._cnt <<
-            "\n  active key count = "   << page._act <<
-            "\n  next key offset = "   << page._min <<
-            "\n  page bit size = "  << (uint32_t)page._bits <<
-            "\n  free bit = "  << (bool)page._free <<
-            "\n  page level = "   << (uint32_t)page._level <<
-            "\n  page being deleted = "  << (bool)page._kill <<
-            "\n  dirty bit = " << (bool)page._dirty <<
-            "\n]\n";
-
-        for (uint slot = 1; slot <= page._cnt; ++slot) {
-            Slot* slotPtr  = Page::slotptr( (Page*)&page, slot );
-            BLTKey* keyPtr = Page::keyptr( (Page*)&page, slot );
-
-            os << *slotPtr << " : "
-                << std::string( (const char*)keyPtr->_key, keyPtr->_len )
-                << std::endl;
+    void BLTVal::putid( uchar* dest, uid id ) {
+        int i = BtId;
+        while( i-- ) {
+            dest[i] = (uchar)id;
+            id >>= 8;
         }
-
-        return os << std::endl;
     }
+    
+    uid BLTVal::getid( uchar* src ) {
+        uid id = 0;
+        for (int i = 0; i < BtId; i++) {
+            id <<= 8;
+            id |= *src++; 
+        }
+        return id;
+    }
+
+	/**
+    *  FUNCTION: findslot
+    *
+	*  find slot in page for given key at a given level
+	*/
+    int Page::findslot( Page* page, uchar *key, uint keylen ) {
+	    uint diff;
+        uint higher = page->cnt;
+        uint low = 1;
+        uint slot;
+	    uint good = 0;
+	
+		// make stopper key an infinite fence value
+		if (BLTVal::getid( page->right )) {
+			higher++;
+        }
+		else {
+			good++;
+        }
+	
+		// low is the lowest candidate. loop ends when they meet.
+		// higher is already tested as >= the passed key
+		while ( (diff = higher - low) ) {
+			slot = low + ( diff >> 1 );
+			if (BLTKey::keycmp( keyptr(page, slot), key, keylen ) < 0) {
+				low = slot + 1;
+            }
+			else {
+				higher = slot;
+                good++;
+            }
+		}
+	
+		//	return zero if key is on right link page
+		return good ? higher : 0;
+	}
 
 }   // namespace mongo
-

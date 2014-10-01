@@ -1,5 +1,4 @@
 //@file latchmgr.h
-
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -27,7 +26,6 @@
 *    exception statement from all source files in the program, then also delete
 *    it in the license file.
 */
-
 /*
  * This is a derivative work.  The original 'C' source
  * code was put in the public domain by Karl Malbrain
@@ -52,29 +50,40 @@
 
 #ifndef STANDALONE
 #include "mongo/db/storage/bltree/common.h"
-#include "mongo/db/storage/bltree/page.h"
 #else
 #include "common.h"
-#include "page.h"
 #endif
 
-namespace mongo {
+#include <pthread.h>
 
+namespace mongo {
     /*
-      There are five lock types for each node in three independent sets: 
-        1. (set 1) AccessIntent: Sharable. Going to Read node. Incompatible with NodeDelete. 
-        2. (set 1) NodeDelete: Exclusive. About to release node. Incompatible with AccessIntent. 
-        3. (set 2) ReadLock: Sharable. Read node. Incompatible with WriteLock. 
-        4. (set 2) WriteLock: Exclusive. Modify node. Incompatible with ReadLock and WriteLock. 
-        5. (set 3) ParentModification: Exclusive. Change node parent keys. Incompatible ParentModification. 
+    *    There are six lock types for each node in four independent sets: 
+    *    Set 1
+    *        1. AccessIntent: Sharable.
+    *               Going to Read the node. Incompatible with NodeDelete. 
+    *        2. NodeDelete: Exclusive.
+    *               About to release the node. Incompatible with AccessIntent. 
+    *    Set 2
+    *        3. ReadLock: Sharable.
+    *               Read the node. Incompatible with WriteLock. 
+    *        4. WriteLock: Exclusive.
+    *               Modify the node. Incompatible with ReadLock and other WriteLocks. 
+    *    Set 3
+    *        5. ParentModification: Exclusive.
+    *               Change the node's parent keys. Incompatible with ParentModification. 
+    *    Set 4
+    *        6. AtomicModification: Exclusive.
+    *               Atomic Update including node is underway. Incompatible with AtomicModification. 
     */
-    
+
     enum BLTLockMode {
-        LockAccess,
-        LockDelete,
-        LockRead,
-        LockWrite,
-        LockParent
+        LockAccess    =  1,
+        LockDelete    =  2,
+        LockRead      =  4,
+        LockWrite     =  8,
+        LockParent    = 16,
+        LockAtomic    = 32
     };
     
     //
@@ -82,85 +91,80 @@ namespace mongo {
     //
     class BLT_RWLock {
     public:
-        static void WriteLock( BLT_RWLock* lock );
-        static void WriteRelease( BLT_RWLock* lock );
-        static void ReadLock( BLT_RWLock* lock );
-        static void ReadRelease( BLT_RWLock* lock );
+        static void WriteLock( BLT_RWLock* );
+        static void WriteRelease( BLT_RWLock* );
+        static void ReadLock( BLT_RWLock* );
+        static void ReadRelease( BLT_RWLock* );
 
-    public:
         ushort rin[1];
         ushort rout[1];
         ushort ticket[1];
         ushort serving[1];
     };
     
-    #define PHID 0x1
-    #define PRES 0x2
-    #define MASK 0x3
-    #define RINC 0x4
+    #define PHID        0x1
+    #define PRES        0x2
+    #define MASK        0x3
+    #define RINC        0x4
     
-    //    definition for spin latch implementation
-    
-    // exclusive is set for write access
-    // share is count of read accessors
-    // grant write lock when share == 0
-    
+    /**
+    *  spin latch implementation
+    */
     class SpinLatch {
     public:
-        static void spinreadlock( SpinLatch* latch );
-        static void spinwritelock( SpinLatch* latch );
-        static int  spinwritetry( SpinLatch* latch );
-        static void spinreleasewrite( SpinLatch* latch );
-        static void spinreleaseread( SpinLatch* latch );
+        static void spinreadlock( SpinLatch* );
+        static void spinwritelock( SpinLatch* );
+        static int  spinwritetry( SpinLatch* );
+        static void spinreleasewrite( SpinLatch* );
+        static void spinreleaseread( SpinLatch* );
 
-    public:
-        ushort exclusive:1;
+        ushort exclusive:1;     // exclusive is set for write access
         ushort pending:1;
-        ushort share:14;
+        ushort share:14;        // share is count of read accessors
+                                //   grant write lock when share == 0
     };
     
-    #define XCL 1
-    #define PEND 2
-    #define BOTH 3
-    #define SHARE 4
+    #define XCL         1
+    #define PEND        2
+    #define BOTH        3
+    #define SHARE       4
     
-    //
-    //  hash table entries
-    //
+    /**
+    *  hash table entries
+    */
     struct HashEntry {
+        volatile uint slot;     // latch table entry at head of chain
         SpinLatch latch[1];
-        volatile ushort slot;        // Latch table entry at head of chain
     };
     
-    //
-    //    latch manager table structure
-    //
-    class LatchSet {
-    public:
-        BLT_RWLock readwr[1];       // read/write page lock
-        BLT_RWLock access[1];       // Access Intent/Page delete
-        BLT_RWLock parent[1];       // Posting of fence key in parent
-        SpinLatch busy[1];          // slot is being moved between chains
-        volatile ushort next;       // next entry in hash table chain
-        volatile ushort prev;       // prev entry in hash table chain
-        volatile ushort pin;        // number of outstanding locks
-        volatile ushort hash;       // hash slot entry is under
-        volatile uid page_no;       // latch set page number
+    /**
+    *  latch manager table structure
+    */
+    struct LatchSet {
+        uid page_no;            // latch set page number
+        BLT_RWLock readwr[1];   // read / write page lock
+        BLT_RWLock access[1];   // access intent / page delete
+        BLT_RWLock parent[1];   // posting of fence key in parent
+        BLT_RWLock atomic[1];   // atomic update in progress
+        uint split;             // right split page atomic insert
+        uint entry;             // entry slot in latch table
+        uint next;              // next entry in hash table chain
+        uint prev;              // prev entry in hash table chain
+        volatile ushort pin;    // number of outstanding threads
+        ushort dirty:1;         // page in cache is dirty
+
+    #ifdef unix
+        pthread_t atomictid;    // thread id holding atomic lock
+    #else
+        uint atomictid;
+    #endif
 
     };
-    
+
+
     class LatchMgr {
     public:
-        Page alloc[1];              // next page_no in right ptr
-        unsigned char chain[BtId];  // head of free page_nos chain
-        SpinLatch lock[1];          // allocation area lite latch
-        ushort latchdeployed;       // highest number of latch entries deployed
-        ushort nlatchpage;          // number of latch pages at BT_latch
-        ushort latchtotal;          // number of page latch entries
-        ushort latchhash;           // number of latch hash table slots
-        ushort latchvictim;         // next latch entry to examine
-        HashEntry table[0];         // the hash table
-
     };
-    
+
 }   // namespace mongo
+

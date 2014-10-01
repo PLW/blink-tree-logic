@@ -1,5 +1,4 @@
 //@file bltree.cpp
-
 /*
 *    Copyright (C) 2014 MongoDB Inc.
 *
@@ -49,15 +48,15 @@
  */
 
 #ifndef STANDALONE
-#include "mongo/db/storage/bltree/bltree.h"
-#include "mongo/db/storage/bltree/bltval.h"
+#include "mongo/db/storage/bltree/page.h"
 #include "mongo/db/storage/bltree/latchmgr.h"
 #include "mongo/db/storage/bltree/bufmgr.h"
+#include "mongo/db/storage/bltree/bltree.h"
 #else
-#include "bltree.h"
-#include "bltval.h"
+#include "page.h"
 #include "latchmgr.h"
 #include "bufmgr.h"
+#include "bltree.h"
 #endif
 
 #include <errno.h>
@@ -120,177 +119,251 @@ namespace mongo {
     *  use 1 based indexing.
     */
 
-    //
-    //  factory: BLTree access method
-    //
-    BLTree* BLTree::create( BufMgr* mgr ) {
-        BLTree* bt = (BLTree*)malloc( sizeof(BLTree) );
-        memset( bt, 0, sizeof(BLTree) );
-        bt->mgr = mgr;
-        bt->mem = (uchar *)malloc( 2 * mgr->page_size );
-        bt->frame = (Page *)bt->mem;
-        bt->cursor = (Page *)(bt->mem + 1 * mgr->page_size);
-        return bt;
-    }
-
-    //
-    //  close and release memory
-    //
-    void BLTree::close() {
-        if (mem) free(mem);
+    /**
+    *  close and release memory
+    */
+    void ~BLTree() {
+    #ifdef unix
+        if (mem) free( mem );
+    #else
+        if (mem) VirtualFree( mem, 0, MEM_RELEASE );
+    #endif
     }
     
-    //
-    //  a fence key was deleted from a page
-    //  push new fence value upwards
-    //  @return error code
-    //
-    Status BLTree::fixfence( PageSet* set, uint lvl ) {
+    /**
+    *  FUNCTION:  create
+    *
+    *  open BTree access method based on buffer manager
+    */ 
+    BLTree* BLTree::create( BufMgr* bufMgr ) {
     
-        uchar leftkey[256], rightkey[256];
+        BLTree* tree = malloc( sizeof(BLTree) );
+        memset( tree, 0, sizeof(BLTree) );
+        tree->bufMgr = bufMgr;
+    
+    #ifdef unix
+        tree->mem = valloc( 2 * bufMgr->page_size );
+    #else
+        tree->mem = VirtualAlloc( NULL, 2 * bufMgr->page_size, MEM_COMMIT, PAGE_READWRITE );
+    #endif
+    
+        tree->frame = (Page *)tree->mem;
+        tree->cursor = (Page *)(tree->mem + 1 * bufMgr->page_size);
+        return tree;
+    }
+    
+    /**
+    *  FUNCTION:  fixfence
+    *
+    *  a fence key was deleted from a page,
+    *  push new fence value upwards
+    */
+    BLTERR BLTree::fixfence( PageSet* set, uint lvl ) {
+        uchar leftkey[BT_keyarray];
+        uchar rightkey[BT_keyarray];
         uchar value[BtId];
-        uid page_no;
         BLTKey* ptr;
+        uint idx;
     
         // remove the old fence value
         ptr = keyptr(set->page, set->page->cnt);
-        memcpy( rightkey, ptr, ptr->len + 1 );
+        memcpy( rightkey, ptr, ptr->len + sizeof(BLTKey) );
+        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
+        set->latch->dirty = 1;
     
-        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
-        set->page->dirty = 1;
-    
+        // cache new fence value
         ptr = keyptr(set->page, set->page->cnt);
-        memcpy( leftkey, ptr, ptr->len + 1 );
-        page_no = set->page_no;
+        memcpy( leftkey, ptr, ptr->len + sizeof(BLTKey) );
     
-        mgr->lockpage( LockParent, set->latch );
-        mgr->unlockpage( LockWrite, set->latch );
+        BufMgr::lockpage( LockParent, set->latch );
+        BufMgr::unlockpage( LockWrite, set->latch );
     
         // insert new (now smaller) fence key
-        BLTVal::putid( value, page_no );
+        BLTVal::putid( value, set->latch->page_no );
+        ptr = (BLTKey*)leftkey;
     
-    #ifndef STANDALONE
-        Status s = insertkey( leftkey+1, *leftkey, lvl+1, value, BtId );
-        if (!s.isOK()) return s;
-    #else
-        if (insertkey( leftkey+1, *leftkey, lvl+1, value, BtId )) {
-            return (BTERR)mgr->err;
+        if (insertkey( ptr->key, ptr->len, lvl+1, value, BtId, 1 )) {
+            return err;
         }
-    #endif
     
         // now delete old fence key
-    #ifndef STANDALONE
-        s = deletekey( rightkey+1, *rightkey, lvl+1 );
-        if (!s.isOK()) return s;
-    #else
-        if (deletekey( rightkey+1, *rightkey, lvl+1 )) {
-            return (BTERR)mgr->err;
-        }
-    #endif
+        ptr = (BLTKey*)rightkey;
     
-        mgr->unlockpage( LockParent, set->latch );
-        mgr->unpinlatch( set->latch );
-        mgr->unpinpool( set->pool );
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
+        if (deletekey( ptr->key, ptr->len, lvl+1 )) {
+            return err;
+        }
+    
+        BufMgr::unlockpage( LockParent, set->latch );
+        unpinlatch( set->latch );
+        return 0;
     }
     
-    //
-    //  root has a single child
-    //  collapse a level from the tree
-    //  @return error code
-    //
-    Status BLTree::collapseroot( PageSet *root ) {
-    
+    /**
+    *  FUNCTION: collapseroot
+    *
+    *  root has a single child
+    *  collapse a level from the tree
+    */
+    BLTERR BLTree::collapseroot( PageSet* root ) {
         PageSet child[1];
+        uid page_no;
         uint idx;
     
         // find the child entry and promote as new root contents
+    
         do {
             for (idx = 0; idx++ < root->page->cnt; ) {
                 if (!slotptr(root->page, idx)->dead) break;
             }
-    
-            child->page_no = BLTVal::getid( valptr(root->page, idx)->value );
-    
-            child->latch = mgr->pinlatch( child->page_no );
-            mgr->lockpage( LockDelete, child->latch );
-            mgr->lockpage( LockWrite, child->latch );
-    
-            if ( (child->pool = mgr->pinpool( child->page_no )) ) {
-                child->page = mgr->page( child->pool, child->page_no);
+        
+            page_no = BLTVal::getid( valptr(root->page, idx)->value );
+        
+            if (child->latch = pinlatch( page_no, 1, &reads, &writes )) {
+                child->page = mappage( child->latch );
             }
             else {
-
-            #ifndef STANDALONE
-                return Status( ErrorCodes::InternalError, "pinpool error in 'collapseroot'" );
-            #else
-                return (BTERR)mgr->err;
-            #endif
-
+                return err;
             }
-    
+        
+            BufMgr::lockpage( LockDelete, child->latch );
+            BufMgr::lockpage( LockWrite, child->latch );
+        
             memcpy( root->page, child->page, mgr->page_size );
-            mgr->freepage( child );
-    
-        } while( root->page->lvl > 1 && root->page->act == 1 );
-    
-        mgr->unlockpage( LockWrite, root->latch );
-        mgr->unpinlatch( root->latch );
-        mgr->unpinpool( root->pool );
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
-
+            root->latch->dirty = 1;
+            freepage( child );
+        
+        } while (root->page->lvl > 1 && root->page->act == 1);
+        
+        BufMgr::unlockpage( LockWrite, root->latch );
+        unpinlatch( root->latch );
+        return 0;
     }
+    
+    /**
+    *  FUNCTION:  deletepage
+    *
+    *  delete a page and manage keys
+    *  call with page writelocked
+    *  returns with page unpinned
+    */
+    BLTERR BLTree::deletepage( PageSet* set, BLTLockMode mode ) {
+        uchar lowerfence[BT_keyarray];
+        uchar higherfence[BT_keyarray];
+        uchar value[BtId];
+        uint lvl = set->page->lvl;
+        PageSet right[1];
+        uid page_no;
+        BLTKey* ptr;
+    
+        // cache copy of fence key to post in parent
+        ptr = keyptr( set->page, set->page->cnt );
+        memcpy( lowerfence, ptr, ptr->len + sizeof(BLTKey) );
+    
+        // obtain lock on right page
+        page_no = BLTVal::getid( set->page->right );
+    
+        if (right->latch = pinlatch( page_no, 1, &reads, &writes )) {
+            right->page = mappage( right->latch );
+        }
+        else {
+            return 0;
+        }
+    
+        BufMgr::lockpage( LockWrite, right->latch );
+        BufMgr::lockpage( mode, right->latch );
+    
+        // cache copy of key to update
+        ptr = keyptr( right->page, right->page->cnt );
+        memcpy( higherfence, ptr, ptr->len + sizeof(BLTKey) );
+    
+        if (right->page->kill) {
+            return (err = BLTERR_struct);
+        }
+    
+        // pull contents of right peer into our empty page
+        memcpy( set->page, right->page, mgr->page_size );
+        set->latch->dirty = 1;
+    
+        // mark right page deleted and point it to left page
+        // until we can post parent updates that remove access
+        // to the deleted page.
+        BLTVal::putid( right->page->right, set->latch->page_no );
+        right->latch->dirty = 1;
+        right->page->kill = 1;
+    
+        BufMgr::lockpage( LockParent, right->latch );
+        BufMgr::unlockpage( LockWrite, right->latch );
+        BufMgr::unlockpage( mode, right->latch );
+        BufMgr::lockpage( LockParent, set->latch );
+        BufMgr::unlockpage( LockWrite, set->latch );
+    
+        // redirect higher key directly to our new node contents
+        BLTVal::putid( value, set->latch->page_no );
+        ptr = (BLTKey*)higherfence;
+    
+        if (insertkey( ptr->key, ptr->len, lvl+1, value, BtId, 1 )) {
+            return err;
+        }
+    
+        // delete old lower key to our node
+        ptr = (BLTKey*)lowerfence;
+    
+        if (deletekey( ptr->key, ptr->len, lvl+1 )) {
+            return err;
+        }
+    
+        // obtain delete and write locks to right node
+        BufMgr::unlockpage( LockParent, right->latch );
+        BufMgr::lockpage( LockDelete, right->latch );
+        BufMgr::lockpage( LockWrite, right->latch );
+        freepage( right );
+        BufMgr::unlockpage( LockParent, set->latch );
+        unpinlatch( set->latch );
+        found = 1;
+        return 0;
+    }
+    
     
     //
     //  find and delete key on page by marking delete flag bit
     //  if page becomes empty, delete it from the btree
-    //  @return error code
     //
-    Status BLTree::deletekey( uchar* key, uint len, uint lvl ) {
-    
-        uchar lowerfence[256], higherfence[256];
-        uint slot, idx, dirty = 0, fence, found0;
-        PageSet set[1], right[1];
-        uchar value[BtId];
+    BLTERR BLTree::deletekey( uchar* key, uint len, uint lvl ) {
+        uint slot;
+        uint idx;
+        uint found;
+        uint fence;
+        PageSet set[1];
         BLTKey* ptr;
+        BLTVal* val;
     
-        if ( (slot = mgr->loadpage( set, key, len, lvl, LockWrite )) ) {
-            ptr = keyptr(set->page, slot);
+        if (slot = loadpage( set, key, len, lvl, LockWrite )) {
+            ptr = keyptr( set->page, slot );
         }
         else {
-        #ifndef STANDALONE
-            return Status( ErrorCodes::InternalError, "loadpage error in 'deletekey'" );
-        #else
-            return (BTERR)mgr->err;
-        #endif
+            return err;
         }
     
-        // are we deleting a fence slot?
+        // if librarian slot, advance to real slot
+        if (slotptr( set->page, slot )->type == Librarian) {
+            ptr = keyptr(set->page, ++slot);
+        }
+    
         fence = (slot == set->page->cnt);
     
-        // if key is found, delete it, otherwise ignore request
-        if ( (found0 = !BLTKey::keycmp( ptr, key, len )) ) {
-    
-            if ( (found0 = slotptr(set->page, slot)->dead) == 0 ) {
-                dirty = slotptr(set->page, slot)->dead = 1;
-                set->page->dirty = 1;
+        // if key is found delete it, otherwise ignore request
+        if (found = !BLTKey::keycmp (ptr, key, len) ) {
+            if (found = slotptr(set->page, slot)->dead == 0 ) {
+                val = valptr(set->page,slot);
+                slotptr(set->page, slot)->dead = 1;
+                set->page->garbage += ptr->len + val->len + sizeof(BLKey) + sizeof(BLTVal);
                 set->page->act--;
-    
-                // collapse empty slots
-                while ( (idx = set->page->cnt - 1) ) {
-                    if (slotptr(set->page, idx)->dead) {
-                        *slotptr(set->page, idx) = *slotptr(set->page, idx + 1);
-                        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(Slot) );
+        
+                // collapse empty slots beneath the fence
+                while (idx = set->page->cnt - 1) {
+                    if (slotptr( set->page, idx )->dead) {
+                        *slotptr( set->page, idx ) = *slotptr( set->page, idx + 1 );
+                        memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
                     }
                     else {
                         break;
@@ -300,365 +373,333 @@ namespace mongo {
         }
     
         // did we delete a fence key in an upper level?
-        if (dirty && lvl && set->page->act && fence) {
-
-        #ifndef STANDALONE
-            Status s = fixfence( set, lvl );
-            if (!s.isOK()) {
-                return s;
-            }
-            else {
-                found = found0;
-                return Status::OK();
-            }
-        #else
+        if (found && lvl && set->page->act && fence) {
             if (fixfence( set, lvl )) {
-                return (BTERR)err;
+                return err;
             }
             else {
-                found = found0;
-                return (BTERR)0;
+                found = found;
+                return 0;
             }
-        #endif
-
         }
     
-        // is this a collapsed root?
-        if (lvl > 1 && set->page_no == ROOT_page && set->page->act == 1) {
-
-        #ifndef STANDALONE
-            Status s = collapseroot( set );
-            if (!s.isOK()) {
-                return s;
-            }
-            else {
-                found = found0;
-                return Status::OK();
-            }
-        #else
+        // do we need to collapse root?
+        if (lvl > 1 && set->latch->page_no == ROOT_page && set->page->act == 1) {
             if (collapseroot( set )) {
-                return (BTERR)err;
+                return err;
             }
             else {
-                found = found0;
-                return (BTERR)0;
+               found = found;
+               return 0;
             }
-        #endif
-
         }
     
-        // return if page is not empty
-         if (set->page->act) {
-            mgr->unlockpage( LockWrite, set->latch );
-            mgr->unpinlatch( set->latch );
-            mgr->unpinpool( set->pool );
-            found = found0;
-        #ifndef STANDALONE
-            return Status::OK();
-        #else
-            return (BTERR)0;
-        #endif
+        // delete empty page
+        if( !set->page->act ) {
+            return deletepage( set, 0 );
         }
+        set->latch->dirty = 1;
+        BufMgr::unlockpage( LockWrite, set->latch );
+        unpinlatch( set->latch );
+        found = found;
+        return 0;
+    }
     
-        // cache copy of fence key to post in parent
-        ptr = keyptr( set->page, set->page->cnt );
-        memcpy( lowerfence, ptr, ptr->len + 1 );
-    
-        //    obtain lock on right page
-        right->page_no = BLTVal::getid( set->page->right );
-        right->latch = mgr->pinlatch( right->page_no );
-        mgr->lockpage( LockWrite, right->latch );
-    
-        // pin page contents
-        if ( (right->pool = mgr->pinpool( right->page_no )) ) {
-            right->page = mgr->page( right->pool, right->page_no );
-        }
-        else {
-
-        #ifndef STANDALONE
-            return Status::OK();
-        #else
-            return (BTERR)0;
-        #endif
-
-        }
-    
-        if (right->page->kill) {
-
-        #ifndef STANDALONE
-            return Status( ErrorCodes::InternalError, "structural error in 'deletekey'" );
-        #else
-            return (BTERR)(err = BTERR_struct);
-        #endif
-
-        }
-    
-        // pull contents of right peer into our empty page
-        memcpy( set->page, right->page, mgr->page_size );
-    
-        // cache copy of key to update
-        ptr = keyptr(right->page, right->page->cnt);
-        memcpy( higherfence, ptr, ptr->len + 1 );
-    
-        // mark right page deleted and point it to left page
-        //    until we can post parent updates
-        BLTVal::putid( right->page->right, set->page_no );
-        right->page->kill = 1;
-    
-        mgr->lockpage( LockParent, right->latch );
-        mgr->unlockpage( LockWrite, right->latch );
-        mgr->lockpage( LockParent, set->latch );
-        mgr->unlockpage( LockWrite, set->latch );
-    
-        // redirect higher key directly to our new node contents
-        BLTVal::putid( value, set->page_no );
-    
-    #ifndef STANDALONE
-        Status s = insertkey( higherfence+1, *higherfence, lvl+1, value, BtId );
-        if (!s.isOK()) return s;
-    #else
-        if (insertkey( higherfence+1, *higherfence, lvl+1, value, BtId )) {
-            return (BTERR)err;
-        }
-    #endif
-    
-        // delete old lower key to our node
-    #ifndef STANDALONE
-        s = deletekey( lowerfence+1, *lowerfence, lvl+1 );
-        if (!s.isOK()) return s;
-    #else
-        if (deletekey( lowerfence+1, *lowerfence, lvl+1 )) {
-            return (BTERR)err;
-        }
-    #endif
-    
-        // obtain delete and write locks to right node
-        mgr->unlockpage( LockParent, right->latch );
-        mgr->lockpage( LockDelete, right->latch );
-        mgr->lockpage( LockWrite, right->latch );
-        mgr->freepage( right );
-    
-        mgr->unlockpage( LockParent, set->latch );
-        mgr->unpinlatch( set->latch );
-        mgr->unpinpool( set->pool );
-        found = found0;
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
-
+    BLTKey* BLTree::foundkey() {
+        return (BLTKey*)key;
     }
     
     //
-    //  find key in leaf level and
-    //  @return number of value bytes, or 0 if not found
+    // advance to next slot
     //
-    int BLTree::findkey( uchar* key, uint keylen, uchar* value, uint valmax ) {
-        PageSet set[1];
-        uint slot;
-        BLTKey* ptr;
-        BLTVal* val;
+    uint BLTree::findnext( PageSet* set, uint slot ) {
     
-        if ( (slot = mgr->loadpage( set, key, keylen, 0, LockRead )) ) {
-            ptr = keyptr(set->page, slot);
+        if (slot < set->page->cnt) return slot + 1;
+        LatchSet* prevlatch = set->latch;
+        uid page_no;
+        if (page_no = BLTVal::getid( set->page->right )) {
+            if ( (set->latch = pinlatch( page_no, 1, &reads, &writes )) {
+                set->page = mappage( set->latch );
+            }
+            else {
+                return 0;
+            }
         }
         else {
+            err = BLTERR_struct;
             return 0;
         }
     
-        // if key exists, return TRUE, otherwise FALSE
-        int ret;
-        if (!BLTKey::keycmp( ptr, key, keylen )) {
-            val = valptr (set->page,slot);
-            if (valmax > val->len) {
-                valmax = val->len;
-            }
-            memcpy( value, val->value, valmax );
-            ret = valmax;
-        } else {
-            ret = 0;
+        // obtain access lock using lock chaining with Access mode
+        BufMgr::lockpage( LockAccess, set->latch );
+        BufMgr::unlockpage( LockRead, prevlatch );
+        unpinlatch( prevlatch );
+        BufMgr::lockpage( LockRead, set->latch );
+        BufMgr::unlockpage( LockAccess, set->latch );
+        return 1;
+    }
+    
+    //
+    // find unique key or first duplicate key in
+    //   leaf level and return number of value bytes
+    //   or (-1) if not found.  Setup key for foundkey
+    //
+    int BLTree::findkey( uchar *key, uint keylen, uchar *value, uint valmax ) {
+        PageSet set[1];
+        uint len;
+        uint slot;
+        int ret = -1;
+        BLTKey *ptr;
+        BLTVal *val;
+    
+        if ( (slot = loadpage( set, key, keylen, 0, LockRead )) ) {
+            do {
+                ptr = keyptr(set->page, slot);
+            
+                // skip librarian slot place holder
+                if (LIbrarian == slotptr(set->page, slot)->type) {
+                    ptr = keyptr(set->page, ++slot);
+                }
+            
+                // return actual key found
+                memcpy( key, ptr, ptr->len + sizeof(BLTKey) );
+                len = ptr->len;
+            
+                if (Duplicate == slotptr(set->page, slot)->type) {
+                    len -= BtId;
+                }
+            
+                // not there if we reach the stopper key
+                if (slot == set->page->cnt) {
+                    if( !BLTVal::getid( set->page->right )) {
+                        break;
+                    }
+                }
+            
+                // if key exists, return >= 0 value bytes copied
+                // otherwise return (-1)
+                if (slotptr(set->page, slot)->dead) continue;
+            
+                if (keylen == len) {
+                    if (!memcmp( ptr->key, key, len )) {
+                        val = valptr(set->page,slot);
+                        if (valmax > val->len ) valmax = val->len;
+                        memcpy( value, val->value, valmax );
+                        ret = valmax;
+                    }
+                }
+            
+                break;
+            
+            } while( (slot = findnext( set, slot )) );
         }
     
-        // unlock all locks asserted by 'loadpage'
-        mgr->unlockpage( LockRead, set->latch );
-        mgr->unpinlatch( set->latch );
-        mgr->unpinpool( set->pool );
+        BufMgr::unlockpage( LockRead, set->latch );
+        unpinlatch( set->latch );
         return ret;
     }
     
-    //
-    //  check page for space available, clean if necessary
-    //  @return  0  page needs splitting
-    //          >0  new slot value
-    //
-    uint BLTree::cleanpage( Page* page, uint keylen, uint slot, uint vallen ) {
-    
+    /**
+    *  FUNCTION: cleanpage
+    *
+    *  check page for space available,
+    *    clean if necessary and return
+    *    0 - page needs splitting
+    *    >0  new slot value
+    */
+    uint BLTree::cleanpage( PageSet* set, uint keylen, uint slot, uint vallen ) {
         uint nxt = mgr->page_size;
-        uint cnt = 0, idx = 0;
+        Page page = set->page;
+        uint cnt = 0;
+        uint idx = 0;
         uint max = page->cnt;
         uint newslot = max;
-        BLTKey* key;
-        BLTVal* val;
+        BLTKey *key;
+        BLTVal *val;
     
-        if (page->min >= (max+1) * sizeof(Slot) + sizeof(*page) + keylen + 1 + vallen + 1) {
-            return slot;
-        }
+        if (page->min >= (max+2)*sizeof(Slot)
+                            + sizeof(*page)
+                            + keylen + sizeof(BLTKey)
+                            + vallen + sizeof(BLTVal)) { return slot; }
     
-        // skip cleanup if nothing to reclaim
-        if (!page->dirty) {
-            return 0;
-        }
+        // skip cleanup and proceed to split
+        // if there's not enough garbage to bother with.
+        if (page->garbage < nxt / 5) return 0;
     
         memcpy( frame, page, mgr->page_size );
     
         // skip page info and set rest of page to zero
         memset( page+1, 0, mgr->page_size - sizeof(*page) );
-        page->dirty = 0;
+        set->latch->dirty = 1;
+        page->garbage = 0;
         page->act = 0;
     
-        // try cleaning up page first by removing deleted keys
+        // clean up page first by removing deleted keys
         while (cnt++ < max) {
-            if (cnt == slot) {
-                newslot = idx + 1;
-            }
-            if (cnt < max && slotptr(frame,cnt)->dead) {
-                continue;
-            }
-    
-            // copy the key across
-            key = keyptr(frame, cnt);
-            nxt -= key->len + 1;
-            memcpy( (uchar *)page + nxt, key, key->len + 1 );
+            if (cnt == slot) newslot = idx + 2;
+            if (cnt < max && slotptr(frame,cnt)->dead) continue;
     
             // copy the value across
             val = valptr(frame, cnt);
-            nxt -= val->len + 1;
-            ((uchar *)page)[nxt] = val->len;
-            memcpy( (uchar *)page + nxt + 1, val, val->len );
+            nxt -= val->len + sizeof(BLTVal);
+            memcpy( (uchar *)page + nxt, val, val->len + sizeof(BLTVal));
+    
+            // copy the key across
+            key = keyptr(frame, cnt);
+            nxt -= key->len + sizeof(BLTKey);
+            memcpy( (uchar *)page + nxt, key, key->len + sizeof(BLTKey) );
+    
+            // make a librarian slot
+            if (idx) {
+                slotptr(page, ++idx)->off = nxt;
+                slotptr(page, idx)->type = Librarian;
+                slotptr(page, idx)->dead = 1;
+            }
     
             // set up the slot
-            slotptr(page, idx)->off = nxt;
+            slotptr(page, ++idx)->off = nxt;
+            slotptr(page, idx)->type = slotptr(frame, cnt)->type;
     
-            if( !(slotptr(page, idx)->dead = slotptr(frame, cnt)->dead) )
-                page->act++;
+            if (!(slotptr(page, idx)->dead = slotptr(frame, cnt)->dead)) page->act++;
         }
     
         page->min = nxt;
         page->cnt = idx;
     
         // see if page has enough space now, or does it need splitting?
-        if (page->min >= (idx+1) * sizeof(Slot) + sizeof(*page) + keylen + 1 + vallen + 1) {
+        if (page->min >= (idx+2) * sizeof(Slot)
+                            + sizeof(*page)
+                            + keylen + sizeof(BLTKey)
+                            + vallen + sizeof(BLTVal) ) {
             return newslot;
         }
     
         return 0;
     }
     
-    //
-    //  split the root and raise the height of the btree
-    //  @return error code
-    //
-    Status BLTree::splitroot( PageSet* root, uchar* leftkey, uid page_no2 ) {
+    /**
+    *  FUNCTION:  splitroot
+    *
+    *  split the root and raise the height of the btree
+    */
+    BLTERR BLTree::splitroot( PageSet* root, LatchSet* right) {  
+        uchar leftkey[BT_keyarray];
         uint nxt = mgr->page_size;
         uchar value[BtId];
-        uid left;
+        PageSet left[1];
+        uid left_page_no;
+        BLTKey* ptr;
+        BLTVal* val;
     
-        // Obtain an empty page to use, and copy the current
-        // root contents into it, e.g. lower keys
-        if (!(left = mgr->newpage( root->page ))) {
-
-        #ifndef STANDALONE
-            return Status( ErrorCodes::InternalError, "newpage error in 'splitroot'" );
-        #else
-            return (BTERR)err;
-        #endif
-
-        }
+        // save left page fence key for new root
+        ptr = keyptr(root->page, root->page->cnt);
+        memcpy( leftkey, ptr, ptr->len + sizeof(BLTKey) );
+    
+        //  Obtain an empty page to use, and copy the current
+        //  root contents into it, e.g. lower keys
+        if (newpage( left, root->page )) return err; 
+    
+        left_page_no = left->latch->page_no;
+        unpinlatch( left->latch );
     
         // preserve the page info at the bottom
         // of higher keys and set rest to zero
         memset( root->page+1, 0, mgr->page_size - sizeof(*root->page) );
     
-        // insert lower keys page fence key on newroot page as first key
-        nxt -= BtId + 1;
-        BLTVal::putid( value, left );
-        ((uchar *)root->page)[nxt] = BtId;
-        memcpy( (uchar *)root->page + nxt + 1, value, BtId );
+        // insert stopper key at top of newroot page
+        // and increase the root height
+        nxt -= BtId + sizeof(BLTVal);
+        BLTVal::putid( value, right->page_no );
+        val = (BLTVal *)((uchar *)root->page + nxt);
+        memcpy( val->value, value, BtId );
+        val->len = BtId;
     
-        nxt -= *leftkey + 1;
-        memcpy( (uchar *)root->page + nxt, leftkey, *leftkey + 1 );
-        slotptr(root->page, 1)->off = nxt;
-        
-        // insert stopper key on newroot page and increase the root height
-        nxt -= 3 + BtId + 1;
-        ((uchar *)root->page)[nxt] = 2;
-        ((uchar *)root->page)[nxt+1] = 0xff;
-        ((uchar *)root->page)[nxt+2] = 0xff;
-    
-        BLTVal::putid( value, page_no2 );
-        ((uchar *)root->page)[nxt+3] = BtId;
-        memcpy( (uchar *)root->page + nxt + 4, value, BtId );
+        nxt -= 2 + sizeof(BLTKey);
         slotptr(root->page, 2)->off = nxt;
+        ptr = (BLTKey *)((uchar *)root->page + nxt);
+        ptr->len = 2;
+        ptr->key[0] = 0xff;
+        ptr->key[1] = 0xff;
     
+        // insert lower keys page fence key on newroot page as first key
+        nxt -= BtId + sizeof(BLTVal);
+        BLTVal::putid( value, left_page_no );
+        val = (BLTVal *)((uchar *)root->page + nxt);
+        memcpy( val->value, value, BtId );
+        val->len = BtId;
+    
+        ptr = (BLTKey *)leftkey;
+        nxt -= ptr->len + sizeof(BLTKey);
+        slotptr(root->page, 1)->off = nxt;
+        memcpy( (uchar *)root->page + nxt, leftkey, ptr->len + sizeof(BLTKey) );
+        
         BLTVal::putid( root->page->right, 0 );
-        root->page->min = nxt;  // reset lowest used offset and key count
+        root->page->min = nxt;        // reset lowest used offset and key count
         root->page->cnt = 2;
         root->page->act = 2;
         root->page->lvl++;
     
-        // release and unpin root
-        mgr->unlockpage( LockWrite, root->latch );
-        mgr->unpinlatch( root->latch );
-        mgr->unpinpool( root->pool );
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
-
+        // release and unpin root pages
+        BufMgr::unlockpage( LockWrite, root->latch );
+        unpinlatch( root->latch );
+    
+        unpinlatch( right );
+        return 0;
     }
     
-    //
-    //  split already locked full node
-    //  @return err code, with page unlocked
-    //
-    Status BLTree::splitpage( PageSet* set ) {
-        uint cnt = 0, idx = 0, max, nxt = mgr->page_size;
-        uchar fencekey[256], rightkey[256];
-        uchar value[BtId];
+    
+    /**
+    *  FUNCTION:  splitpage
+    *
+    *  split already locked full node; leave it locked.
+    *  @return pool entry for new right page, unlocked
+    */
+    uint BLTree::splitpage( PageSet* set ) {
+        uint cnt = 0;
+        uint idx = 0;
+        uint max;
+        uint nxt = mgr->page_size;
         uint lvl = set->page->lvl;
         PageSet right[1];
-        BLTKey* key = NULL;
-        BLTVal* val = NULL;
+        BLTKey* key;
+        BLTKey* ptr;
+        BLTVal* val;
+        BLTVal* src;
+        uid right2;
+        uint prev;
     
-        // split higher half of keys to 'frame'
+        //  split higher half of keys to frame
         memset( frame, 0, mgr->page_size );
         max = set->page->cnt;
         cnt = max / 2;
         idx = 0;
     
-        while( cnt++ < max ) {
-            val = valptr( set->page, cnt );
-            nxt -= val->len + 1;
-            ((uchar *)frame)[nxt] = val->len;
-            memcpy( (uchar *)frame + nxt + 1, val->value, val->len );
+        while (cnt++ < max) {
+            if (slotptr(set->page, cnt)->dead && cnt < max) continue;
+            src = valptr( set->page, cnt );
+            nxt -= src->len + sizeof(BLTVal);
+            memcpy( (uchar *)frame + nxt, src, src->len + sizeof(BLTVal) );
     
             key = keyptr(set->page, cnt);
-            nxt -= key->len + 1;
-            memcpy( (uchar *)frame + nxt, key, key->len + 1 );
+            nxt -= key->len + sizeof(BLTKey);
+            ptr = (BLTKey*)((uchar *)frame + nxt);
+            memcpy( ptr, key, key->len + sizeof(BLTKey) );
     
-            slotptr(frame, ++idx)->off = nxt;
+            // add librarian slot
+            if (idx) {
+                slotptr( frame, ++idx)->off = nxt;
+                slotptr( frame, idx)->type = Librarian;
+                slotptr( frame, idx)->dead = 1;
+            }
     
-            if (!(slotptr(frame, idx)->dead = slotptr(set->page, cnt)->dead) ) {
+            //  add actual slot
+            slotptr( frame, ++idx )->off = nxt;
+            slotptr( frame, idx )->type = slotptr( set->page, cnt )->type;
+    
+            if (!(slotptr( frame, idx )->dead = slotptr( set->page, cnt )->dead)) {
                 frame->act++;
             }
         }
-    
-        // remember existing fence key for new page to the right
-        memcpy( rightkey, key, key->len + 1 );
     
         frame->bits = mgr->page_bits;
         frame->min = nxt;
@@ -666,402 +707,975 @@ namespace mongo {
         frame->lvl = lvl;
     
         // link right node
-        if (set->page_no > ROOT_page) {
-            memcpy( frame->right, set->page->right, BtId );
+        if (set->latch->page_no > ROOT_page) {
+            BLTVal::putid( frame->right, BLTVal::getid( set->page->right ) );
         }
     
         // get new free page and write higher keys to it.
-        if ( !(right->page_no = mgr->newpage( frame )) ) {
-
-        #ifndef STANDALONE
-            return Status( ErrorCodes::InternalError, "newpage error in 'splitpage'" );
-        #else
-            return (BTERR)err;
-        #endif
-
+        if (newpage( right, frame )) {
+            return 0;
         }
     
-        // update lower keys to continue in old page
-        memcpy( frame, set->page, mgr->page_size);
-        memset( set->page+1, 0, mgr->page_size - sizeof(*set->page));
+        memcpy( frame, set->page, mgr->page_size );
+        memset( set->page+1, 0, mgr->page_size - sizeof(*set->page) );
+        set->latch->dirty = 1;
+    
         nxt = mgr->page_size;
-        set->page->dirty = 0;
+        set->page->garbage = 0;
         set->page->act = 0;
+        max /= 2;
         cnt = 0;
         idx = 0;
     
-        //  assemble page of smaller keys
-        while( cnt++ < max / 2 ) {
+        if (slotptr( frame, max )->type == Librarian) { max--; }
+    
+        // assemble page of smaller keys
+        while (cnt++ < max) {
+            if (slotptr(frame, cnt)->dead) continue;
             val = valptr(frame, cnt);
-            nxt -= val->len + 1;
-            ((uchar *)set->page)[nxt] = val->len;
-            memcpy( (uchar *)set->page + nxt + 1, val->value, val->len);
+            nxt -= val->len + sizeof(BLTVal);
+            memcpy( (uchar *)set->page + nxt, val, val->len + sizeof(BLTVal) );
     
             key = keyptr(frame, cnt);
-            nxt -= key->len + 1;
-            memcpy( (uchar *)set->page + nxt, key, key->len + 1);
+            nxt -= key->len + sizeof(BLTKey);
+            memcpy( (uchar *)set->page + nxt, key, key->len + sizeof(BLTKey) );
+    
+            // add librarian slot
+            if (idx) {
+                slotptr(set->page, ++idx)->off = nxt;
+                slotptr(set->page, idx)->type = Librarian;
+                slotptr(set->page, idx)->dead = 1;
+            }
+    
+            // add actual slot
             slotptr(set->page, ++idx)->off = nxt;
+            slotptr(set->page, idx)->type = slotptr(frame, cnt)->type;
             set->page->act++;
         }
     
-        // remember fence key for smaller page
-        memcpy(fencekey, key, key->len + 1);
-    
-        BLTVal::putid( set->page->right, right->page_no );
+        BLTVal::putid( set->page->right, right->latch->page_no );
         set->page->min = nxt;
         set->page->cnt = idx;
     
+        return right->latch->entry;
+    }
+    
+    /**
+    *  FUNCTION: splitkeys
+    *
+    *  fix keys for newly split page
+    *  call with page locked,
+    *  @return unlocked
+    */
+    BLTERR BLTree::splitkeys( PageSet* set, LatchSet* right) {
+        uchar leftkey[BT_keyarray];
+        uchar rightkey[BT_keyarray];
+        uchar value[BtId];
+        uint lvl = set->page->lvl;
+        BLTKey *ptr;
+    
         // if current page is the root page, split it
-        if ( set->page_no == ROOT_page ) {
-            return splitroot( set, fencekey, right->page_no );
+        if (ROOT_page == set->latch->page_no) {
+            return splitroot( set, right );
         }
+    
+        Page* ptr = keyptr(set->page, set->page->cnt);
+        memcpy( leftkey, ptr, ptr->len + sizeof(BLTKey) );
+    
+        page = mappage( right );
+    
+        ptr = keyptr(page, page->cnt);
+        memcpy (rightkey, ptr, ptr->len + sizeof(BLTKey));
     
         // insert new fences in their parent pages
-        right->latch = mgr->pinlatch( right->page_no );
-        mgr->lockpage( LockParent, right->latch );
-        mgr->lockpage( LockParent, set->latch );
-        mgr->unlockpage( LockWrite, set->latch );
+        BufMgr::lockpage( LockParent, right );
+        BufMgr::lockpage( LockParent, set->latch );
+        BufMgr::unlockpage( LockWrite, set->latch );
     
         // insert new fence for reformulated left block of smaller keys
-        BLTVal::putid( value, set->page_no );
-
-    #ifndef STANDALONE
-        Status s = insertkey( fencekey+1, *fencekey, lvl+1, value, BtId );
-        if (!s.isOK()) return s;
-    #else
-        if ( insertkey( fencekey+1, *fencekey, lvl+1, value, BtId ) ) {
-            return (BTERR)err;
+        BLTVal::putid( value, set->latch->page_no );
+        ptr = (BLTKey *)leftkey;
+    
+        if (insertkey( ptr->key, ptr->len, lvl+1, value, BtId, 1 )) {
+            return err;
         }
-    #endif
     
         // switch fence for right block of larger keys to new right page
         BLTVal::putid( value, right->page_no );
-
-    #ifndef STANDALONE
-        s = insertkey( rightkey+1, *rightkey, lvl+1, value, BtId );
-        if (!s.isOK()) return s;
-    #else
-        if (insertkey( rightkey+1, *rightkey, lvl+1, value, BtId )) {
-            return (BTERR)err;
+        ptr = (BLTKey *)rightkey;
+    
+        if (insertkey( ptr->key, ptr->len, lvl+1, value, BtId, 1 )) {
+            return err;
         }
-    #endif
     
-        mgr->unlockpage( LockParent, set->latch) ;
-        mgr->unpinlatch( set->latch) ;
-        mgr->unpinpool( set->pool) ;
-        mgr->unlockpage( LockParent, right->latch) ;
-        mgr->unpinlatch( right->latch) ;
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
-    
+        BufMgr::unlockpage( LockParent, set->latch );
+        unpinlatch( set->latch );
+        BufMgr::unlockpage( LockParent, right );
+        unpinlatch( right );
+        return 0;
     }
     
-    //
-    //  Insert new key into the btree at given level.
-    //
-    Status BLTree::insertkey( uchar* key, uint keylen, uint lvl, uchar* value, uint vallen) {
+    /**
+    *  FUNCTION:  insertslot
+    *
+    *  install new key and value onto page
+    *  page must already be checked for adequate space
+    */ 
+    BLTERR BLTree::insertslot( PageSet* set, uint slot,
+                                uchar *key, uint keylen,
+                                uchar* value, uint vallen,
+                                uint type, uint release)
+    {
+        uint idx;
+        uint librarian;
+        Slot *node;
+        BLTKey *ptr;
+        BLTVal *val;
     
-        PageSet set[1];
-        uint slot, idx;
-        uint reuse;
-        BLTKey* ptr;
-        BLTVal* val;
+        // if found slot > desired slot and previous slot
+        // is a librarian slot, use it
+        if (slot > 1) {
+            if (Librarian == slotptr(set->page, slot-1)->type) slot--;
+        }
     
-        while (true) {
-            if ( (slot = mgr->loadpage( set, key, keylen, lvl, LockWrite )) ) {
-                ptr = keyptr(set->page, slot);
-            }
-            else {
-
-            #ifndef STANDALONE
-                return Status( ErrorCodes::InternalError, "loadpage error in 'insertkey'" );
-            #else
-                if (!err) err = BTERR_ovflw;
-                return (BTERR)err;
-            #endif
-
-            }
+        // copy value onto page
+        set->page->min -= vallen + sizeof(BLTVal);
+        val = (BLTVal*)((uchar *)set->page + set->page->min);
+        memcpy( val->value, value, vallen );
+        val->len = vallen;
     
-            // if key already exists, update id and return
-            if ( (reuse = !BLTKey::keycmp( ptr, key, keylen )) ) {
-                if ( (val = valptr(set->page, slot), val->len >= vallen) ) {
-                    if (slotptr(set->page, slot)->dead ) {
-                        set->page->act++;
-                    }
-                    slotptr(set->page, slot)->dead = 0;
-                    val->len = vallen;
-                    memcpy( val->value, value, vallen );
-                    mgr->unlockpage( LockWrite, set->latch );
-                    mgr->unpinlatch( set->latch );
-                    mgr->unpinpool( set->pool );
-
-                #ifndef STANDALONE
-                    return Status::OK();
-                #else
-                    return (BTERR)0;
-                #endif
-
-                } else {
-                    if (!slotptr(set->page, slot)->dead) {
-                        set->page->act--;
-                    }
-                    slotptr(set->page, slot)->dead = 1;
-                    set->page->dirty = 1;
-                }
-            }
-    
-            // check if page has enough space
-            if ( (slot = cleanpage( set->page, keylen, slot, vallen )) ) {
-                break;
-            }
-    
-        #ifndef STANDALONE
-            Status s = splitpage( set );
-            if (!s.isOK()) return s;
-        #else
-            if (splitpage( set )) {
-                return (BTERR)err;
-            }
-        #endif
-
-        }   // end while
-    
-        // calculate next available slot and copy key into page
-        set->page->min -= vallen + 1; // reset lowest used offset
-        ((uchar *)set->page)[set->page->min] = vallen;
-        memcpy( (uchar *)set->page + set->page->min +1, value, vallen );
-    
-        set->page->min -= keylen + 1; // reset lowest used offset
-        ((uchar *)set->page)[set->page->min] = keylen;
-        memcpy( (uchar *)set->page + set->page->min +1, key, keylen );
-    
+        // copy key onto page
+        set->page->min -= keylen + sizeof(BLTKey);
+        ptr = (BLTKey*)((uchar *)set->page + set->page->min);
+        memcpy( ptr->key, key, keylen );
+        ptr->len = keylen;
+        
+        // find first empty slot
         for (idx = slot; idx < set->page->cnt; idx++) {
-            if (slotptr(set->page, idx)->dead) break;
+            if (slotptr( set->page, idx )->dead) break;
         }
     
         // now insert key into array before slot
-        if (!reuse && idx == set->page->cnt) {
-            idx++, set->page->cnt++;
+        if (idx == set->page->cnt) {
+            idx += 2;
+            set->page->cnt += 2;
+            librarian = 2;
+        }
+        else {
+            librarian = 1;
         }
     
+        set->latch->dirty = 1;
         set->page->act++;
     
-        while (idx > slot) {
-            *slotptr(set->page, idx) = *slotptr(set->page, idx -1), idx--;
+        while (idx > slot + librarian - 1) {
+            *slotptr(set->page, idx) = *slotptr( set->page, idx - librarian );
+            idx--;
         }
     
-        slotptr(set->page, slot)->off = set->page->min;
-        slotptr(set->page, slot)->dead = 0;
+        // add librarian slot
+        if (librarian > 1) {
+            node = slotptr( set->page, slot++ );
+            node->off = set->page->min;
+            node->type = Librarian;
+            node->dead = 1;
+        }
     
-        mgr->unlockpage( LockWrite, set->latch );
-        mgr->unpinlatch( set->latch );
-        mgr->unpinpool( set->pool );
-
-    #ifndef STANDALONE
-        return Status::OK();
-    #else
-        return (BTERR)0;
-    #endif
-
+        // fill in new slot
+        node = slotptr(set->page, slot);
+        node->off = set->page->min;
+        node->type = type;
+        node->dead = 0;
+    
+        if (release) {
+            BufMgr::unlockpage( LockWrite, set->latch );
+            unpinlatch( set->latch );
+        }
+    
+        return 0;
     }
     
-    //
-    //  cache page of keys into cursor and return starting slot for given key
-    //
+    /**
+    *  FUNCTION: insertkey
+    *
+    *  Insert new key into the btree at given level.
+    *    either add a new key or update/add an existing one
+    */
+    BLTERR BLTree::insertkey( uchar* key, uint keylen, uint lvl,
+                              void* value, uint vallen,
+                              uint unique )
+    {
+        uchar newkey[BT_keyarray];
+        uint slot;
+        uint idx;
+        uint len;
+        uint entry;
+        PageSet set[1];
+        BLTKey* ptr;
+        BLTKey* ins;
+        uid sequence;
+        BLTVal* val;
+        uint type;
+    
+        // set up the key we're working on
+        ins = (BLTKey*)newkey;
+        memcpy( ins->key, key, keylen );
+        ins->len = keylen;
+    
+        // is this a non-unique index value?
+        if (unique) {
+          type = Unique;
+        }
+        else {
+            type = Duplicate;
+            sequence = newdup();
+            BLTVal::putid( ins->key + ins->len + sizeof(BLTKey), sequence );
+            ins->len += BtId;
+        }
+      
+        while ( true ) { // find the page and slot for the current key
+            if (slot = loadpage( set, ins->key, ins->len, lvl, LockWrite) )
+                ptr = keyptr(set->page, slot);
+            else {
+                if (!err) err = BLTERR_ovflw;
+                return err;
+            }
+        
+            // if librarian slot == found slot, advance to real slot
+            if (Librarian == slotptr(set->page, slot)->type) {
+                if (!BLTKey::keycmp(ptr, key, keylen)) {
+                    ptr = keyptr(set->page, ++slot);
+                }
+            }
+        
+            len = ptr->len;
+        
+            if (Duplicate == slotptr(set->page, slot)->type) len -= BtId;
+        
+            // if inserting a duplicate key or unique key
+            //   check for adequate space on the page
+            //   and insert the new key before slot.
+            if (unique && (len != ins->len || memcmp( ptr->key, ins->key, ins->len )) || !unique ) {
+                if (!(slot = cleanpage( set, ins->len, slot, vallen )) ) {
+                    if ( !(entry = splitpage( set )) ) {
+                        return err;
+                    }
+                    else if (splitkeys( set, mgr->latchsets + entry )) {
+                        return err;
+                    }
+                }
+                else {
+                    continue;
+                }
+                return insertslot( set, slot, ins->key, ins->len, value, vallen, type, 1 );
+            }
+        
+            // if key already exists, update value and return
+            val = valptr(set->page, slot);
+        
+            if (val->len >= vallen) {
+                if (slotptr(set->page, slot)->dead) set->page->act++;
+                set->page->garbage += val->len - vallen;
+                set->latch->dirty = 1;
+                slotptr(set->page, slot)->dead = 0;
+                val->len = vallen;
+                memcpy (val->value, value, vallen);
+                BufMgr::unlockpage( LockWrite, set->latch );
+                unpinlatch( set->latch );
+                return 0;
+            }
+        
+            // new update value doesn't fit in existing value area
+            if (!slotptr(set->page, slot)->dead) {
+                set->page->garbage += val->len + ptr->len + sizeof(BLTKey) + sizeof(BLTVal);
+            }
+            else {
+                slotptr(set->page, slot)->dead = 0;
+                set->page->act++;
+            }
+        
+            if ( !(slot = cleanpage( set, keylen, slot, vallen )) ) {
+                if ( !(entry = splitpage( set )) ) {
+                    return err;
+                }
+                else if( splitkeys( set, mgr->latchsets + entry )) {
+                    return err;
+                }
+                else {
+                    continue;
+                }
+            }
+        
+            set->page->min -= vallen + sizeof(BLTVal);
+            val = (BLTVal*)((uchar *)set->page + set->page->min);
+            memcpy (val->value, value, vallen);
+            val->len = vallen;
+        
+            set->latch->dirty = 1;
+            set->page->min -= keylen + sizeof(BLTKey);
+            ptr = (BLTKey*)((uchar *)set->page + set->page->min);
+            memcpy (ptr->key, key, keylen);
+            ptr->len = keylen;
+            
+            slotptr(set->page, slot)->off = set->page->min;
+            BufMgr::unlockpage( LockWrite, set->latch );
+            unpinlatch( set->latch );
+            return 0;
+    
+        }   // end while
+    
+        return 0;
+    }
+    
+    struct AtomicMod {
+        uint entry;            // latch table entry number
+        uint slot:30;        // page slot number
+        uint reuse:1;        // reused previous page
+        uint emptied:1;        // page was emptied
+    };
+    
+    struct AtomicKey {
+        uid page_no;        // page number for split leaf
+        void* next;            // next key to insert
+        uint entry;            // latch table entry number
+        uchar leafkey[BT_keyarray];
+    };
+    
+    /**
+    *  FUNCTION: atomicpage
+    *
+    *  determine actual page where key is located
+    *  return slot number with set page locked
+    */
+    uint BLTree::atomicpage( Page* source, AtomicMod* locks, uint src, PageSet* set) {
+        BLTKey* key = keyptr( source, src );
+        uint slot = locks[src].slot;
+        uint entry;
+    
+        if (src > 1 && locks[src].reuse) {
+            entry = locks[src-1].entry, slot = 0;
+        }
+        else {
+            entry = locks[src].entry;
+        }
+    
+        if (slot) {
+            set->latch = mgr->latchsets + entry;
+            set->page = mappage( set->latch );
+            return slot;
+        }
+    
+        // is locks->reuse set?
+        // if so, find where our key
+        // is located on previous page or split pages
+        do {
+            set->latch = mgr->latchsets + entry;
+            set->page = mappage( set->latch );
+    
+            if ( (slot = Page::findslot( set->page, key->key, key->len )) {
+                if( locks[src].reuse ) locks[src].entry = entry;
+                return slot;
+            }
+        } while ( (entry = set->latch->split) );
+    
+        err = BLTERR_atomic;
+        return 0;
+    }
+ 
+
+    /**
+    *  FUNCTION: atomicinsert
+    */
+    BLTERR BLTree::atomicinsert( Page* source, AtomicMod* locks, uint src ) {
+        BLTKey* key = keyptr(source, src);
+        BLTVal* val = valptr(source, src);
+        LatchSet* latch;
+        PageSet set[1];
+        uint entry;
+    
+        while ( (locks[src].slot = atomicpage( source, locks, src, set )) ) {
+
+            if (locks[src].slot = cleanpage( set, key->len, locks[src].slot, val->len )) {
+                return insertslot( set, locks[src].slot,
+                                   key->key, key->len,
+                                   val->value, val->len,
+                                   slotptr(source, src)->type, 0 );
+            }
+        
+            uint entry = splitpage( set );
+
+            if (entry) {
+                latch = mgr->latchsets + entry;
+            }
+            else {
+                return err;
+            }
+        
+            // splice right page into split chain and WriteLock it.
+            latch->split = set->latch->split;
+            set->latch->split = entry;
+            BufMgr::lockpage( LockWrite, latch );
+        }
+        return (err = BLTERR_atomic);
+    }
+ 
+    
+    /**
+    *  FUNCTION: atomicdelete
+    */
+    BLTERR BLTree::atomicdelete( Page* source, AtomicMod* locks, uint src ) {
+        BLTKey* key = keyptr( source, src );
+        uint idx;
+        uint slot;
+        PageSet set[1];
+    
+        if ( (slot = atomicpage( source, locks, src, set )) ) {
+            slotptr(set->page, slot)->dead = 1;
+        }
+        else {
+            return (err = BLTERR_struct);
+        }
+    
+        BLTKey* ptr = keyptr( set->page, slot );
+        BLTVal* val = valptr( set->page, slot );
+        set->page->garbage += ptr->len + val->len + sizeof(BLTKey) + sizeof(BLTVal);
+        set->page->act--;
+    
+        // collapse empty slots beneath the fence
+        while (idx = set->page->cnt - 1) {
+            if (slotptr( set->page, idx )->dead) {
+                *slotptr( set->page, idx ) = *slotptr(set->page, idx + 1);
+                memset( slotptr(set->page, set->page->cnt--), 0, sizeof(BLTSlot) );
+            } else {
+                break;
+            }
+        }
+    
+        set->latch->dirty = 1;
+        return 0;
+    }
+    
+    /**
+    *  FUNCTION: qsortcmp
+    *
+    *  qsort comparison function
+    */
+    int qsortcmp( BLTSlot* slot1, BLTSlot* slot2, Page* page ) {
+        BLTKey* key1 = (BLTKey *)((uchar *)page + slot1->off);
+        BLTKey* key2 = (BLTKey *)((uchar *)page + slot2->off);
+        return BLTKey::keycmp( key1, key2->key, key2->len );
+    }
+    
+    
+    /**
+    *  FUNCTION:  atomicmods
+    *
+    *  atomic modification of a batch of keys.
+    *     return -1 if BLTERR is set
+    *     otherwise return slot number causing the key constraint violation
+    *     or zero on successful completion.
+    * 
+    *     source contains (key,value) pairs, with the opcode encoded in slot 'type'
+    */
+    int BLTree::atomicmods( Page* source ) {
+    
+        PageSet set[1];
+        PageSet prev[1];
+        uchar value[BtId];
+    
+        BLTKey* ptr;
+        BLTKey* key;
+        BLTKey* key2;
+    
+        LatchSet* latch;
+        AtomicMod* locks;
+        int result = 0;
+        BLTVal* val;
+    
+        // one lock per source page entry
+        locks = calloc( source->cnt + 1, sizeof(AtomicMod) );
+        AtomicKey* head = NULL;
+        AtomicKey* tail = NULL;
+        AtomicKey* leaf;
+    
+        // First sort the list of keys into order to prevent deadlocks between threads.
+        qsort_r( slotptr(source,1), source->cnt, sizeof(BLTSlot),
+                    (__compar_d_fn_t)qsortcmp, source );
+      
+        // Validate transaction:
+        //   Load the leafpage for each key
+        //   and determine any constraint violations
+        for (uint src = 0; src++ < source->cnt; ) {  // i.e.  for (ops in Ops) ..
+            key = keyptr(source, src);
+            val = valptr(source, src);
+            uint slot = 0;
+            bool samepage = false;
+        
+            // First determine if this modification falls
+            //   on the same page as the previous modification
+            //   *note that the far right leaf page is a special case
+            if ( (samepage = src > 1) ) {
+    
+                // skip initial step ('set' uninitialized), otherwise see if key is on set->page
+                if ( (samepage = !BLTVal::getid( set->page->right )
+                      || BLTKey::keycmp( keyptr( set->page, set->page->cnt ),
+                                            key->key, key->len ) > 0) ) {
+                    slot = Page::findslot( set->page, key->key, key->len );
+                }
+                else { // release read on previous page
+                    BufMgr::unlockpage( LockRead, set->latch ); 
+                }
+            }
+        
+            if (!slot) { // not on same page as previous op, get page
+                if ( slot = loadpage( set, key->key, key->len, 0, LockAtomic | LockRead )) {
+                    set->latch->split = 0;
+                }
+                else {
+                    return -1;  // i.e. ERROR
+                }
+            }
+        
+            if (Librarian == slotptr( set->page, slot )->type) {
+                // step past librarian slot
+                ptr = keyptr(set->page, ++slot);
+            }
+            else {
+                ptr = keyptr( set->page, slot );
+             }
+        
+            if (!samepage) {
+                locks[src].entry = set->latch->entry;
+                locks[src].slot  = slot;
+                locks[src].reuse = 0;
+            } else {
+                // i.e. entry and slot are in locks[src-1]
+                locks[src].entry = 0;
+                locks[src].slot  = 0;
+                locks[src].reuse = 1;
+            }
+        
+            switch (slotptr( source, src )->type) {
+            case Duplicate: {
+                // tbd
+                break;
+            }
+            case Unique: {
+                if (!slotptr( set->page, slot )->dead) {
+        
+                    // check : if not fence, or if fence, not infinite
+                    if (slot < set->page->cnt || BLTVal::getid( set->page->right )) {
+        
+                        // then compare keys - could be keycmp
+                        if (ptr->len == key->len && !memcmp( ptr->key, key->key, key->len )) {
+        
+                            // return constraint violation if key already exists
+                            result = src;
+                            BufMgr::unlockpage( LockRead, set->latch );
+                            // all prev pages already read unlocked
+        
+                            while (src) {
+                                // remove all previous atomic locks
+                                if (locks[src].entry) {
+                                    set->latch = mgr->latchsets + locks[src].entry;
+                                    BufMgr::unlockpage( LockAtomic, set->latch );
+                                    unpinlatch( set->latch );
+                                }
+                                src--;
+                            }
+        
+                            free( locks );
+                            return result;
+                        }
+                    }
+                }
+                break;
+            }
+            case Delete: {
+                if (!slotptr( set->page, slot )->dead) {
+                    if (ptr->len == key->len) {
+                        if (!memcmp( ptr->key, key->key, key->len )) {
+                            break;
+                        }
+                    }
+                }
+        
+                // Key to delete doesn't exist
+                result = src;
+                BufMgr::unlockpage( LockRead, set->latch );
+        
+                while (src) {
+                    if (locks[src].entry) {
+                        set->latch = mgr->latchsets + locks[src].entry;
+                        BufMgr::unlockpage( LockAtomic, set->latch );
+                        unpinlatch( set->latch );
+                    }
+                    src--;
+                }
+        
+                return result;
+            }
+            }   // end switch
+    
+        } // end for
+    
+    
+        // unlock last loadpage lock
+        if (source->cnt > 1) {
+            BufMgr::unlockpage( LockRead, set->latch );
+        }
+    
+        // obtain write lock for each page
+        for (uint src = 0; src++ < source->cnt; ) {
+            if (locks[src].entry) {
+                BufMgr::lockpage( LockWrite, mgr->latchsets + locks[src].entry );
+            }
+        }
+    
+        // insert or delete each key
+        for (uint src = 0; src++ < source->cnt; ) {
+            if (Delete == slotptr( source, src )->type) {
+                if (atomicdelete( source, locks, src)) {
+                    return -1;
+                }
+                else {
+                    continue;
+                }
+            }
+            else {
+                if (atomicinsert( source, locks, src )) {
+                    return -1;
+                }
+                else {
+                    continue;
+                }
+            }
+        }
+    
+        // set ParentModification and release WriteLock
+        // leave empty pages locked for later processing
+        // build queue of keys to insert for split pages
+    
+        for (uint src = 0; src++ < source->cnt; ) {  // i.e.  for (ops in Ops) ..
+            uint next;
+            if (locks[src].reuse) continue;
+    
+            prev->latch = mgr->latchsets + locks[src].entry;
+            prev->page = mappage( prev->latch );
+        
+            // pick-up all splits from original page
+            uint split = (next = prev->latch->split);
+        
+            if (!prev->page->act) {
+                locks[src].emptied = 1;
+            }
+    
+            uint entry; 
+            while ( (entry = next) ) {
+                set->latch = mgr->latchsets + entry;
+                set->page = mappage( set->latch );
+                next = set->latch->split;
+                set->latch->split = 0;
+          
+                // delete empty previous page
+                if (!prev->page->act) {
+    
+                    // recycle prev: pull 'set' content into prev, free 'set'
+                    memcpy( prev->page, set->page, mgr->page_size );
+                    BufMgr::lockpage( LockDelete, set->latch );
+                    freepage( set );
+            
+                    prev->latch->dirty = 1;
+            
+                    if (prev->page->act) {
+                        locks[src].emptied = 0;
+                    }
+            
+                    continue; // following list of 'split' entries till non-empty page
+                }
+          
+                // at this point a non-empty split leaf page has been found
+          
+                // prev page is not emptied 
+                locks[src].emptied = 0;
+          
+                // schedule previous fence key update
+                ptr = keyptr(prev->page,prev->page->cnt); // i.e. fence key
+          
+                // leaf is an entry in a fifo queue of level >=1 updates due to splits
+                leaf = malloc( sizeof(AtomicKey) );
+                memcpy( leaf->leafkey, ptr, ptr->len + sizeof(BLTKey) );
+                leaf->page_no = prev->latch->page_no;
+                leaf->entry = prev->latch->entry;
+                leaf->next = NULL;
+          
+                if (tail) { // initialized to NULL
+                    tail->next = leaf;
+                }
+                else {
+                    head = leaf;
+                }
+          
+                tail = leaf;
+          
+                // remove empty block from the split chain
+                if (!set->page->act) {
+                    memcpy( prev->page->right, set->page->right, BtId );
+                    BufMgr::lockpage( LockDelete, set->latch );
+                    freepage( set );
+                    continue;
+                }
+          
+                BufMgr::lockpage( LockParent, prev->latch );
+                BufMgr::unlockpage( LockWrite, prev->latch );
+                *prev = *set;
+        
+            } // end while
+        
+            //  was entire chain emptied?
+            if (!prev->page->act) continue;
+        
+            if (!split) {
+                BufMgr::unlockpage( LockWrite, prev->latch );
+                continue;
+            }
+        
+            // process last page split in chain
+            ptr = keyptr( prev->page,prev->page->cnt );
+            leaf = malloc( sizeof(AtomicKey) );
+            memcpy( leaf->leafkey, ptr, ptr->len + sizeof(BLTKey) );
+            leaf->page_no = prev->latch->page_no;
+            leaf->entry = prev->latch->entry;
+            leaf->next = NULL;
+        
+            // add 'leaf' to fifo
+            if (tail) {
+                tail->next = leaf;
+            }
+            else {
+                head = leaf;
+            }
+        
+            tail = leaf;
+            BufMgr::lockpage( LockParent, prev->latch );
+            BufMgr::unlockpage( LockWrite, prev->latch );
+    
+        } // end for ( op in Ops )
+      
+        // remove Atomic locks and process any empty pages
+        for (uint src = source->cnt; src; src--) {
+            if (locks[src].reuse) continue;
+        
+            set->latch = mgr->latchsets + locks[src].entry;
+            set->page = mappage( set->latch );
+        
+            // clear original page split field
+            uint split = set->latch->split;
+            set->latch->split = 0;
+            BufMgr::unlockpage( LockAtomic, set->latch );
+        
+            // delete page emptied by our atomic action
+            if (locks[src].emptied) {
+                if (deletepage( set, LockAtomic )) {
+                    return err;
+                }
+                else {
+                    continue;
+                }
+            }
+        
+            if (!split) {
+                unpinlatch( set->latch );
+            }
+        }
+    
+        //  add keys for any pages split during action
+        if ( (leaf = head) )
+            do {
+                ptr = (BLTKey *)leaf->leafkey;
+                BLTVal::putid( value, leaf->page_no );
+                if (insertkey( ptr->key, ptr->len, 1, value, BtId, 1 )) {
+                    return err;
+                }
+                BufMgr::unlockpage( LockParent, mgr->latchsets + leaf->entry );
+                unpinlatch( mgr->latchsets + leaf->entry );
+                tail = leaf->next;
+                free (leaf);
+             } while ( (leaf = tail) );
+        }
+    
+        // return success
+        free( locks );
+        return 0;
+    }
+    
+    
+    // iterator methods
+    
+    /**
+    *  FUNCTION:  nextkey
+    *
+    *   return next slot on cursor page
+    *   or slide cursor right into next page
+    */
+    uint BLTree::nextkey( uint slot ) {
+        PageSet set[1];
+        uid right;
+    
+        do {
+            right = BLTVal::getid(cursor->right);
+        
+            while (slot++ < cursor->cnt) {
+                if (slotptr( cursor,slot )->dead) {
+                    continue;
+                }
+                else if( right || (slot < cursor->cnt) ) { // skip infinite stopper
+                    return slot;
+                }
+                else {
+                    break;
+                }
+            }
+        
+            if (!right) break;
+            cursor_page = right;
+        
+            if (set->latch = pinlatch( right, 1, &reads, &writes )) {
+                set->page = mappage( set->latch );
+            }
+            else {
+                return 0;
+            }
+        
+            BufMgr::lockpage( LockRead, set->latch);
+            memcpy( cursor, set->page, mgr->page_size );
+            BufMgr::unlockpage( LockRead, set->latch);
+            unpinlatch( set->latch );
+            slot = 0;
+      
+        } while( 1 );
+    
+        return (err = 0);
+    }
+    
+    /**
+    *  FUNCTION:  startkey
+    *
+    *  cache page of keys into cursor and return starting slot for given key
+    */
     uint BLTree::startkey( uchar* key, uint len ) {
         PageSet set[1];
         uint slot;
     
         // cache page for retrieval
-        if ( (slot = mgr->loadpage( set, key, len, 0, LockRead )) ) {
+        if ( (slot = loadpage( set, key, len, 0, LockRead )) {
             memcpy( cursor, set->page, mgr->page_size );
         }
         else {
             return 0;
         }
     
-        cursor_page = set->page_no;
-    
-        mgr->unlockpage( LockRead, set->latch );
-        mgr->unpinlatch( set->latch );
-        mgr->unpinpool( set->pool );
+        cursor_page = set->latch->page_no;
+        BufMgr::unlockpage( LockRead, set->latch );
+        unpinlatch( set->latch );
         return slot;
     }
     
-    //
-    //  return next slot for cursor page
-    //  or slide cursor right into next page
-    //
-    uint BLTree::nextkey( uint slot ) {
-        PageSet set[1];
-        uid right;
     
-        do {
-            right = BLTVal::getid( cursor->right );
-     
-            while (slot++ < cursor->cnt) {
-                if (slotptr(cursor,slot)->dead) { continue; }
-                // skip infinite stopper
-                else if (right || (slot < cursor->cnt)) { return slot; }
-                else { break; }
-            }
+    BLTKey* BLTree::key( uint slot ) { return keyptr( cursor, slot ); }
+    BLTVal* BLTree::val( uint slot ) { return valptr( cursor,slot ); }
     
-            if (!right) break;
     
-            cursor_page = right;
-    
-            if ( (set->pool = mgr->pinpool( right )) ) {
-                set->page = mgr->page( set->pool, right );
-            }
-            else {
-                return 0;
-            }
-    
-            set->latch = mgr->pinlatch( right );
-            mgr->lockpage( LockRead, set->latch );
-         
-            memcpy( cursor, set->page, mgr->page_size );
-    
-            mgr->unlockpage( LockRead, set->latch );
-            mgr->unpinlatch( set->latch );
-            mgr->unpinpool( set->pool );
-            slot = 0;
-    
-        } while (true);
-    
-        return (BTERR)(err = 0);
-    }
-    
-    //
-    // latch audit - debugging
-    //
+    /**
+    *  FUNCTION:   latchaudit
+    */
     uint BLTree::latchaudit() {
-        ushort idx, hashidx;
-        uid next, page_no;
-        LatchSet *latch;
+        LatchSet* latch;
         uint cnt = 0;
-        BLTKey* ptr;
     
-        //posix_fadvise( mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
-    
-        if (*(ushort *)(mgr->latchmgr->lock)) {
-            fprintf( stderr, "Alloc page locked\n" );
+        if (*(ushort *)(mgr->lock)) {
+            std::err <<  "Alloc page locked\n" );
         }
-        *(ushort *)(mgr->latchmgr->lock) = 0;
     
-        for( idx = 1; idx <= mgr->latchmgr->latchdeployed; idx++ ) {
+        *(ushort *)(mgr->lock) = 0;
+    
+        for (ushort idx = 1; idx <= mgr->latchdeployed; idx++) {
             latch = mgr->latchsets + idx;
             if (*latch->readwr->rin & MASK) {
-                fprintf( stderr, "latchset %d rwlocked for page %.8lx\n", idx, latch->page_no );
+                std::err <<  "latchset " << idx << " rwlocked for page "
+                            << latch->page_no << std::endl;
             }
-            memset( (ushort *)latch->readwr, 0, sizeof(BLT_RWLock) );
+    
+            memset ((ushort *)latch->readwr, 0, sizeof(RWLock));
     
             if (*latch->access->rin & MASK) {
-                fprintf( stderr, "latchset %d accesslocked for page %.8lx\n", idx, latch->page_no );
+                std::err <<  "latchset " << idx << " accesslocked for page "
+                            << latch->page_no << std::endl;
             }
-            memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
+    
+            memset ((ushort *)latch->access, 0, sizeof(RWLock));
     
             if (*latch->parent->rin & MASK) {
-                fprintf( stderr, "latchset %d parentlocked for page %.8lx\n", idx, latch->page_no );
+                std::err <<  "latchset " << idx << " parentlocked for page "
+                            << latch->page_no << std::endl;
             }
-            memset( (ushort *)latch->access, 0, sizeof(BLT_RWLock) );
+    
+            memset ((ushort *)latch->parent, 0, sizeof(RWLock));
     
             if (latch->pin) {
-                fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
+                std::err <<  "latchset " << idx << " pinned for page "
+                            << latch->page_no << std::endl;
                 latch->pin = 0;
             }
         }
     
-        for (hashidx = 0; hashidx < mgr->latchmgr->latchhash; hashidx++) {
-            if (*(ushort *)(mgr->latchmgr->table[hashidx].latch)) {
-                fprintf( stderr, "hash entry %d locked\n", hashidx );
+        for (ushort hashidx = 0; hashidx < mgr->latchhash; hashidx++) {
+            if (*(ushort *)(mgr->hashtable[hashidx].latch)) {
+                  std::err <<  "hash entry " << hashidx << " locked" << std::endl;
             }
-    
-            *(ushort *)(mgr->latchmgr->table[hashidx].latch) = 0;
-    
-            if ( (idx = mgr->latchmgr->table[hashidx].slot ) ) {
+      
+            *(ushort *)(mgr->hashtable[hashidx].latch) = 0;
+      
+            ushort idx;
+            if ( (idx = mgr->hashtable[hashidx].slot) ) {
                 do {
                     latch = mgr->latchsets + idx;
-                    if (*(ushort *)latch->busy) {
-                        fprintf( stderr, "latchset %d busylocked for page %.8lx\n", idx, latch->page_no );
-                    }
-    
-                    *(ushort *)latch->busy = 0;
-                    if (latch->pin ) {
-                        fprintf( stderr, "latchset %d pinned for page %.8lx\n", idx, latch->page_no );
+                    if (latch->pin) {
+                        std::err <<  "latchset " << idx << " pinned for page "
+                            << latch->page_no << std::endl;
                     }
                 } while ( (idx = latch->next) );
             }
         }
     
-        next = mgr->latchmgr->nlatchpage + LATCH_page;
-        page_no = LEAF_page;
-    
-        while (page_no < BLTVal::getid( mgr->latchmgr->alloc->right )) {
-            off64_t off = (page_no << mgr->page_bits);
-    
-            pread( mgr->idx, frame, mgr->page_size, off);
-    
-            if (!frame->free ) {
-                for( idx = 0; idx++ < frame->cnt - 1; ) {
-                    ptr = keyptr(frame, idx+1);
-                    if (BLTKey::keycmp( keyptr(frame, idx), ptr->key, ptr->len ) >= 0 ) {
-                        fprintf( stderr, "page %.8lx idx %.2x out of order\n", page_no, idx );
-                    }
-                }
-                if( !frame->lvl ) {
-                    cnt += frame->act;
-                }
-            }
-            if (page_no > LEAF_page) next = page_no + 1;
-            page_no = next;
-        }
-    
-        return (cnt - 1);
-    }
-
-    void BLTree::scan( std::ostream& out ) {
-
-        PageSet set[1];
         uid page_no = LEAF_page;
-        uid next;
-        int count   = 0;
+    
+        while (page_no < BLTVal::getid( mgr->pagezero->alloc->right)) {
+            uid off = page_no << mgr->page_bits;
 
-        do {
-            if ( (set->pool = mgr->pinpool( page_no )) ) {
-                set->page = mgr->page( set->pool, page_no );
+    #ifdef unix
+            pread (mgr->idx, frame, mgr->page_size, off);
+    #else
+            DWORD amt[1];
+            SetFilePointer (mgr->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
+            if (!ReadFile(mgr->idx, frame, mgr->page_size, amt, NULL)) {
+                return (err = BLTERR_map);
             }
-            else {
-                break;
+            if (*amt <  mgr->page_size ) {
+                return (err = BLTERR_map);
             }
-            set->latch = mgr->pinlatch( page_no );
-            mgr->lockpage( LockRead, set->latch );
-            next = BLTVal::getid( set->page->right );
-            count += set->page->act;
+    #endif
 
-            for (uint slot = 0; slot++ < set->page->cnt; ) {
-                if (next || slot < set->page->cnt) {
-                    if (!slotptr(set->page, slot)->dead) {
-                        BLTKey* key = keyptr(set->page, slot);
-                        BLTVal* val = valptr( set->page, slot );
-
-                        std::cout << std::string( (char*)key->key, key->len )
-                                  << " -> "
-                                  << std::string( (char*)val->value, val->len )
-                                  << std::endl;
-                    }
-                }
+            if (!frame->free && !frame->lvl ) {
+                cnt += frame->act;
             }
-            mgr->unlockpage( LockRead, set->latch );
-            mgr->unpinlatch( set->latch );
-            mgr->unpinpool( set->pool );
-        } while ( (page_no = next) );
-
-        std::cout << "Scanned " << (count-1) << " documents" << std::endl;
+            page_no++;
+        }
+            
+        cnt--;    // do not count final 'stopper' key
+        std::err << "Total keys read " << cnt << std::endl;
+        close();
+        return 0;
     }
 
 }   // namespace mongo

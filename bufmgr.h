@@ -64,9 +64,9 @@
 
 namespace mongo {
 
-    //
-    //    The memory mapping pool table buffer manager entry
-    //
+    /**
+    *  memory mapping pool table buffer manager entry
+    */
     struct PoolEntry {
         uid  basepage;              // mapped base page number
         char* map;                  // mapped memory pointer
@@ -78,69 +78,127 @@ namespace mongo {
     
     #define CLOCK_bit 0x8000        // bit in pool->pin
     
-    //
-    //  The loadpage interface object
-    //
-    struct PageSet {
-        uid page_no;                // current page number
-        Page* page;                 // current page pointer
-        PoolEntry* pool;            // current page pool
-        LatchSet* latch;            // current page latch set
+    /**
+    *  structure for latch manager on ALLOC_page
+    */
+    struct PageZero {
+        Page alloc[1];              // next page_no in right ptr
+        unsigned long long dups[1]; // global duplicate key uniqueifier
+        unsigned char chain[BtId];  // head of free page_nos chain
     };
     
-    //
-    //    The object structure for Btree access
-    //
+    /**
+    *  object structure for BLTree access
+    */
     class BufMgr {
     public:
-        // factory
-        static BufMgr* create( char* name,
-                                uint mode,
-                                uint bits,
-                                uint poolsize,
-                                uint segsize,
-                                uint hashsize );
+        /**
+        *  FUNCTION: create
+        *
+        *  factory method
+        */
+        static BufMgr* create( const char* name, uint bits, uint nodemax );
 
-        static void  destroy( BufMgr* mgr );
+        /**
+        *  FUNCTION: poolaudit
+        *
+        *  release all resources
+        */
+        void close();
 
-        // segment pool interface
-        PoolEntry* findpool( uid page_no, uint idx );
-        PoolEntry* pinpool( uid page_no );
-        void       unpinpool( PoolEntry* pool );
-        void       linkhash( PoolEntry* pool, uid page_no, int idx );
-        BTERR      mapsegment( PoolEntry* pool, uid page_no );
+        /**
+        *  FUNCTION: poolaudit
+        */
+        void poolaudit();
+    
+        /**
+        *  FUNCTION: latchlink
+        */
+        BLTERR latchlink( uint hashidx, uint slot, uid page_no, uint load_it,
+                            uint* reads );
 
-        // page interface
-        Page* page( PoolEntry* pool, uid page_no );
-        uid   newpage( Page* page );
-        void  lockpage( BLTLockMode mode, LatchSet *set );
-        void  unlockpage( BLTLockMode mode, LatchSet *set );
-        int   findslot( PageSet* set, uchar* key, uint len );
-        int   loadpage( PageSet* set, uchar* key, uint len, uint lvl, BLTLockMode lock );
+        /**
+        *  FUNCTION: pinlatch
+        */
+        LatchSet* pinlatch( uid page_no, uint loadit,
+                            uint* reads, uint* writes );
+
+        /**
+        *  FUNCTION: unpinlatch
+        */
+        void unpinlatch( LatchSet* latch);
+
+        /**
+        *  FUNCTION: loadpage
+        */
+        int loadpage( PageSet*, uchar* key, uint len, uint lvl, BLTLockMode,
+                            uint* reads, uint* writes );
+
+        /**
+        *  FUNCTION: mappage
+        */
+        Page* mappage( LatchSet* latch );
+
+        /**
+        *  FUNCTION: newpage
+        */
+        int newpage( PageSet* set, Page* contents,
+                            uint* reads, uint* writes );
+
+        /**
+        *  FUNCTION: freepage
+        */
         void  freepage( PageSet* set );
 
-        // latch interface
-        void      latchlink( ushort hashidx, ushort victim, uid page_no );
-        void      unpinlatch( LatchSet *set );
-        LatchSet* pinlatch( uid page_no );
-    
+        /**
+        *  FUNCTION: readpage
+        */
+        BLTERR readpage( Page* page, uid page_no );
+
+        /**
+        *  FUNCTION: writepage
+        */
+        BLTERR writepage( Page* page, uid page_no );
+
+        /**
+        *  FUNCTION: lockpage
+        */
+        static void  lockpage( BLTLockMode mode, LatchSet* latch );
+
+        /**
+        *  FUNCTION: unlockpage
+        */
+        static void  unlockpage( BLTLockMode mode, LatchSet* latch );
+
     public:
         uint page_size;             // page size    
         uint page_bits;             // page size in bits    
-        uint seg_bits;              // seg size in pages in bits
-        uint mode;                  // read-write mode
-        int idx;                    // file handle
-        int err;                    // last error code
-        ushort poolcnt;             // highest page pool node in use
-        ushort poolmax;             // highest page pool node allocated
-        ushort poolmask;            // total number of pages in mmap segment - 1
-        ushort hashsize;            // size of Hash Table for pool entries
-        volatile uint evicted;      // last evicted hash table slot
-        ushort* hash;               // pool index for hash entries
-        SpinLatch* latch;           // latches for hash table slots
-        LatchMgr* latchmgr;         // mapped latch page from allocation page
-        LatchSet* latchsets;        // mapped latch set from latch pages
-        PoolEntry* pool;            // memory pool page segment
+
+    #ifdef unix
+        int idx;
+    #else
+        HANDLE idx;
+    #endif
+
+        PageZero *pagezero;         // mapped allocation page
+        SpinLatch lock[1];          // allocation area lite latch
+        uint latchdeployed;         // highest number of latch entries deployed
+        uint nlatchpage;            // number of latch pages at BT_latch
+        uint latchtotal;            // number of page latch entries
+        uint latchhash;             // number of latch hash table slots
+        uint latchvictim;           // next latch entry to examine
+        HashEntry* hashtable;       // the buffer pool hash table entries
+        LatchSet* latchsets;        // mapped latch set from buffer pool
+        uchar* pagepool;            // mapped to the buffer pool pages
+
+    #ifndef unix
+        HANDLE halloc;              // allocation handle
+        HANDLE hpool;               // buffer pool handle
+    #endif
+
+        BLTERR err;                 // last error
+
     };
 
 }   // namespace mongo
+
